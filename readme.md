@@ -1,25 +1,16 @@
-# YOLO v13 Pose Estimation Project
+# Pose Estimation and Matching System
 
-A Python application that uses YOLO v13 for pose estimation to find the closest pose match between a target image and multiple comparison images.
+A Python-based system for estimating human poses from images using YOLO v13 and finding similar poses across a dataset.
 
 ## Features
 
-- **YOLO v13 Integration**: State-of-the-art pose estimation using the latest YOLO model
-- **Pose Matching**: Advanced algorithms to find similar poses across multiple images
-- **Multiple Distance Metrics**: Support for Euclidean, Manhattan, and cosine similarity
-- **Confidence Weighting**: Pose matching weighted by detection confidence
-- **Batch Processing**: Process multiple comparison images efficiently
-- **Comprehensive Output**: Detailed similarity scores and keypoint analysis
-- **Visualization**: Built-in pose visualization capabilities
+- **Pose Estimation**: Extract human poses from images using YOLO v13
+- **Pose Matching**: Find similar poses using advanced similarity algorithms
+- **Multi-Person Detection**: Handle images with multiple people
+- **Visualization**: Generate diagnostic images showing poses and similarity scores
+- **CLI Interface**: Easy-to-use command-line interface
 
 ## Installation
-
-### Prerequisites
-
-- Python 3.8 or higher
-- CUDA-compatible GPU (recommended for optimal performance)
-
-### Setup
 
 1. Clone the repository:
 ```bash
@@ -27,245 +18,208 @@ git clone <repository-url>
 cd poser
 ```
 
-2. Install dependencies:
+2. Create a virtual environment:
+```bash
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. (Optional) Install PyTorch with CUDA support for GPU acceleration:
-```bash
-# For CUDA 11.8
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
-
-# For CUDA 12.1
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-```
-
-## Usage
+## Quick Start
 
 ### Basic Usage
 
-Find the closest pose match between a target image and comparison images:
+Compare a target image against a directory of comparison images:
 
 ```bash
-python main.py --target target.jpg --comparison-dir ./comparison_images/
+python3 main.py --target path/to/target.jpg --comparison-dir path/to/comparison/images
 ```
 
-### Advanced Options
+### Generate Visualizations
+
+Add the `--visualize` flag to create diagnostic images:
 
 ```bash
-python main.py \
-    --target target.jpg \
-    --comparison-dir ./comparison_images/ \
-    --threshold 0.8 \
-    --max-results 20 \
-    --output results.json \
-    --verbose
+python3 main.py --target path/to/target.jpg --comparison-dir path/to/comparison/images --visualize
 ```
 
-### Command Line Arguments
+This will create:
+- `pose_comparison_[target].jpg` - Main grid showing target, overlay, and comparisons
+- `keypoint_analysis_[target].jpg` - Detailed keypoint comparison
+- `pose_overlay_[target].jpg` - Target with winning pose skeleton overlaid
 
-- `--target`: Path to the target image for pose matching (required)
-- `--comparison-dir`: Directory containing comparison images (required)
+### Testing with Sample Images
+
+Use the included test script to randomly test poses:
+
+```bash
+python3 test_random_poses.py
+```
+
+## Usage Examples
+
+### Command Line Options
+
+```bash
+python3 main.py --help
+```
+
+Available options:
+- `--target`: Path to target image
+- `--comparison-dir`: Directory containing comparison images
 - `--threshold`: Confidence threshold for pose detection (default: 0.5)
 - `--max-results`: Maximum number of results to return (default: 10)
-- `--output`: Output file for results in JSON format (optional)
-- `--verbose`: Enable verbose output (optional)
+- `--output`: Save results to JSON file
+- `--visualize`: Generate diagnostic visualizations
+- `--output-dir`: Directory for visualization outputs (default: "results")
+- `--verbose`: Enable verbose output
 
-### Example Output
+### Example Commands
 
-```
-Found 5 pose matches:
---------------------------------------------------------------------------------
- 1. person_standing.jpg
-    Similarity Score: 0.892
-    Rank: 1
+```bash
+# Basic pose matching
+python3 main.py --target data/test_images/basketball1.jpg --comparison-dir data/test_images
 
- 2. person_walking.jpg
-    Similarity Score: 0.756
-    Rank: 2
+# With visualization and custom output
+python3 main.py --target data/test_images/basketball1.jpg --comparison-dir data/test_images --visualize --output-dir my_results --max-results 5
 
- 3. person_sitting.jpg
-    Similarity Score: 0.634
-    Rank: 3
+# Save results to file
+python3 main.py --target data/test_images/basketball1.jpg --comparison-dir data/test_images --output results.json
 ```
 
-## Project Structure
+## Architecture
 
-```
-poser/
-├── README.md                 # This file
-├── requirements.txt          # Python dependencies
-├── main.py                  # Main application entry point
-├── pose_estimator.py        # YOLO pose estimation wrapper
-├── pose_matcher.py          # Pose similarity matching
-├── utils/                   # Utility modules
-│   ├── __init__.py
-│   ├── image_utils.py       # Image loading and processing
-│   └── pose_utils.py        # Pose data structures and utilities
-├── models/                  # Model-related modules
-│   └── __init__.py
-├── data/                    # Data directories
-│   ├── target_images/       # Target images for matching
-│   └── comparison_images/   # Images to compare against
-├── results/                 # Output results
-└── tests/                   # Test modules
-    ├── __init__.py
-    └── test_pose_estimator.py
-```
+### Core Components
 
-## API Reference
-
-### PoseEstimator
-
-Main class for YOLO pose estimation:
-
-```python
-from pose_estimator import PoseEstimator
-
-# Initialize with custom confidence threshold
-estimator = PoseEstimator(confidence_threshold=0.7, model_size="s")
-
-# Extract poses from image
-poses = estimator.extract_poses(image, image_path)
-
-# Get model information
-info = estimator.get_model_info()
-```
-
-### PoseMatcher
-
-Class for pose similarity matching:
-
-```python
-from pose_matcher import PoseMatcher
-
-# Initialize matcher
-matcher = PoseMatcher(distance_metric="euclidean", normalize_keypoints=True)
-
-# Find best match
-best_match = matcher.find_best_match(target_pose, comparison_poses)
-
-# Rank all poses
-ranked_results = matcher.rank_poses(target_pose, comparison_poses)
-```
+- **`main.py`**: Main CLI application and orchestration
+- **`pose_estimator.py`**: YOLO-based pose estimation
+- **`pose_matcher.py`**: Pose similarity calculation and matching
+- **`pose_visualizer.py`**: Diagnostic visualization generation
+- **`utils/`**: Utility functions for image processing and pose data
 
 ### Data Structures
 
-#### PoseData
+- **`PoseData`**: Contains keypoints, bounding box, confidence, and metadata
+- **`SimilarityResult`**: Stores similarity scores and comparison information
 
-```python
-@dataclass
-class PoseData:
-    keypoints: List[Optional[Tuple[float, float, float]]]  # x, y, confidence
-    bounding_box: Tuple[float, float, float, float]        # x1, y1, x2, y2
-    confidence_score: float
-    image_path: str
-    pose_id: str
-```
+### Pose Similarity Algorithm
 
-#### SimilarityResult
+The system uses a sophisticated pose comparison algorithm:
 
-```python
-@dataclass
-class SimilarityResult:
-    target_image: str
-    comparison_image: str
-    similarity_score: float
-    keypoint_distances: List[float]
-    rank: int
-```
-
-## Configuration
-
-### Model Sizes
-
-Available YOLO model sizes:
-- `n` (nano): Fastest, lowest accuracy
-- `s` (small): Good balance of speed and accuracy
-- `m` (medium): Higher accuracy, slower
-- `l` (large): High accuracy, slower
-- `x` (xlarge): Highest accuracy, slowest
-
-### Distance Metrics
-
-- **Euclidean**: Standard Euclidean distance between keypoints
-- **Manhattan**: L1 distance (sum of absolute differences)
-- **Cosine**: Cosine similarity between keypoint vectors
-
-## Performance
-
-- **GPU Acceleration**: 10-50x faster with CUDA-compatible GPU
-- **Batch Processing**: Efficient processing of multiple images
-- **Memory Management**: Optimized for large image collections
-- **Caching**: Automatic model caching for repeated use
+1. **Normalization**: Makes poses position, scale, and orientation invariant
+2. **Keypoint Alignment**: Uses torso (shoulders/hips) as reference for alignment
+3. **Distance Calculation**: Computes Mean Squared Error of normalized keypoint distances
+4. **Similarity Scoring**: Converts distances to similarity scores using exponential decay
 
 ## Testing
 
-Run the test suite:
+### Running Tests
 
 ```bash
 # Run all tests
-python -m pytest tests/
+python3 -m pytest tests/
 
 # Run specific test file
-python -m pytest tests/test_pose_estimator.py
+python3 -m pytest tests/test_pose_estimator.py
 
-# Run with coverage
-python -m pytest --cov=. tests/
+# Run with verbose output
+python3 -m pytest -v tests/
 ```
 
-## Examples
+### Test Images
 
-### Basic Pose Matching
+The system includes sample test images in `data/test_images/`:
+- Basketball poses (basketball1.jpg, basketball2.jpg, basketball3.jpg)
+- Dance poses (dancing1.jpg, dancing2.jpg, dancing3.jpg, dancing4.jpg)
 
-```python
-from pose_estimator import PoseEstimator
-from pose_matcher import PoseMatcher
-from utils.image_utils import load_image
+## Output and Results
 
-# Load images
-target_image = load_image("target.jpg")
-comparison_image = load_image("comparison.jpg")
+### Similarity Scores
 
-# Extract poses
-estimator = PoseEstimator()
-target_poses = estimator.extract_poses(target_image, "target.jpg")
-comparison_poses = estimator.extract_poses(comparison_image, "comparison.jpg")
+Similarity scores range from 0.0 to 1.0:
+- **0.8-1.0**: Very similar poses
+- **0.6-0.8**: Similar poses
+- **0.4-0.6**: Moderately similar poses
+- **0.2-0.4**: Somewhat similar poses
+- **0.0-0.2**: Different poses
 
-# Find matches
-matcher = PoseMatcher()
-if target_poses and comparison_poses:
-    best_match = matcher.find_best_match(target_poses[0], comparison_poses)
-    print(f"Similarity Score: {best_match.similarity_score:.3f}")
-```
+### Visualization Outputs
 
-### Custom Similarity Calculation
+When using `--visualize`, the system generates:
 
-```python
-# Use different distance metric
-matcher = PoseMatcher(distance_metric="cosine", normalize_keypoints=False)
+1. **Main Comparison Grid** (`pose_comparison_[target].jpg`):
+   - Target image with skeleton (top, centered)
+   - Overlay image showing target + winning pose skeleton
+   - All comparison images with their best matching pose skeletons
 
-# Get detailed statistics
-stats = matcher.get_matching_statistics(target_poses[0], comparison_poses)
-print(f"Average similarity: {stats['avg_similarity']:.3f}")
-```
+2. **Keypoint Analysis** (`keypoint_analysis_[target].jpg`):
+   - Detailed comparison of individual keypoints
+   - Distance analysis between corresponding body parts
+
+3. **Pose Overlay** (`pose_overlay_[target].jpg`):
+   - Target image with winning pose skeleton overlaid
+   - Color-coded: Blue (target), Orange (winning pose)
+
+## Performance and Optimization
+
+### Multi-Person Handling
+
+- Automatically detects multiple people in images
+- Selects highest confidence pose as target
+- Compares target against ALL people in comparison images
+- Uses best matching pose from each comparison image
+
+### Memory Management
+
+- Efficient image loading and processing
+- Optimized pose data structures
+- Minimal memory footprint during processing
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **CUDA Out of Memory**: Reduce model size or batch size
-2. **No Poses Detected**: Lower confidence threshold
-3. **Slow Performance**: Use GPU acceleration or smaller model
-4. **Import Errors**: Ensure all dependencies are installed
+1. **No poses detected**: Lower the confidence threshold with `--threshold 0.3`
+2. **Poor similarity scores**: Check image quality and pose clarity
+3. **Visualization errors**: Ensure output directory exists and has write permissions
 
-### Performance Tips
+### Debug Mode
 
-- Use GPU acceleration when available
-- Choose appropriate model size for your use case
-- Process images in batches for efficiency
-- Use appropriate confidence thresholds
+Use `--verbose` for detailed logging:
+
+```bash
+python3 main.py --target image.jpg --comparison-dir images/ --verbose
+```
+
+## Project Status
+
+### Completed Features ✅
+
+- **Core Infrastructure**: Project structure, YOLO integration, pose estimation pipeline
+- **Pose Matching**: Keypoint extraction, normalization, similarity algorithms, ranking
+- **User Interface**: CLI interface, batch processing, results visualization
+- **Optimization**: Performance improvements, memory management, error handling
+- **Multi-Person Detection**: Handles multiple humans in images
+- **Advanced Visualization**: Diagnostic images with pose overlays and skeleton drawing
+
+### Current Capabilities
+
+- **Pose Detection**: YOLO v13 with configurable confidence thresholds
+- **Similarity Calculation**: Normalized pose comparison with MSE-based scoring
+- **Visualization**: Comprehensive diagnostic suite with pose overlays
+- **CLI Interface**: Full-featured command-line application
+- **Testing**: Automated testing with sample images
+
+### Technical Details
+
+- **Model**: YOLO v13 pose estimation (falls back to YOLOv8n-pose.pt)
+- **Keypoints**: 17 COCO format keypoints per person
+- **Similarity**: Position, scale, and orientation invariant comparison
+- **Performance**: Optimized for real-time processing and batch operations
 
 ## Contributing
 
@@ -277,21 +231,10 @@ print(f"Average similarity: {stats['avg_similarity']:.3f}")
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+[Add your license information here]
 
 ## Acknowledgments
 
-- [Ultralytics](https://github.com/ultralytics/ultralytics) for YOLO v13 implementation
-- [COCO Dataset](https://cocodataset.org/) for pose keypoint definitions
-- [OpenCV](https://opencv.org/) for computer vision utilities
-
-## Support
-
-For questions and support:
-- Create an issue on GitHub
-- Check the documentation
-- Review the test examples
-
----
-
-**Note**: This project requires significant computational resources for optimal performance. Consider using GPU acceleration for production use cases.
+- YOLO v13 for pose estimation
+- OpenCV for image processing
+- PyTorch for deep learning backend

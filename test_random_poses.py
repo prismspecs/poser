@@ -87,6 +87,7 @@ def main():
         "--comparison-dir",
         str(comparison_dir),
         "--verbose",
+        "--visualize",
     ]
 
     try:
