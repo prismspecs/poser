@@ -47,6 +47,12 @@ Add the `--visualize` flag to create diagnostic images:
 python3 main.py --target path/to/target.jpg --comparison-dir path/to/comparison/images --visualize
 ```
 
+More robust
+
+```bash
+source venv/bin/activate && python3 main.py --target data/target_images/skateboarding1.webp --comparison-dir data/comparison_images --visualize --body-mask --threshold 0.65 --max-results 5
+```
+
 This will create:
 - `pose_comparison_[target].jpg` - Main grid showing target, overlay, and comparisons
 - `keypoint_analysis_[target].jpg` - Detailed keypoint comparison

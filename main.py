@@ -54,8 +54,8 @@ def parse_arguments():
     parser.add_argument(
         "--relative-visibility-threshold",
         type=float,
-        default=0.6,
-        help="Minimum percentage of target's visible keypoints that must be shared (default: 0.6)",
+        default=0.65,
+        help="Minimum percentage of target's visible keypoints that must be shared (default: 0.65)",
     )
     parser.add_argument("--no-cache", action="store_true", help="Disable pose caching")
     parser.add_argument(
@@ -73,10 +73,20 @@ def parse_arguments():
         help="Apply body segmentation masks to comparison images",
     )
     parser.add_argument(
+        "--no-skeleton",
+        action="store_true",
+        help="Disable skeleton drawing on comparison images (target overlay always shows skeleton)",
+    )
+    parser.add_argument(
+        "--no-mask",
+        action="store_true",
+        help="Disable body masking on comparison images",
+    )
+    parser.add_argument(
         "--model-size",
         choices=["n", "s", "m", "l", "x"],
-        default="m",
-        help="YOLOv11 model size: n=nano, s=small, m=medium, l=large, x=xlarge (default: m)",
+        default="n",
+        help="YOLOv11 model size: n=nano, s=small, m=medium, l=large, x=xlarge (default: n)",
     )
     parser.add_argument(
         "--output-dir",
@@ -101,6 +111,7 @@ def get_target_image_path(args) -> str:
             list(target_path.glob("*.jpg"))
             + list(target_path.glob("*.jpeg"))
             + list(target_path.glob("*.png"))
+            + list(target_path.glob("*.webp"))
         )
         if not target_images:
             print(f"Error: No image files found in target directory: {args.target}")
@@ -127,6 +138,7 @@ def get_comparison_images(comparison_dir: Path) -> List[Path]:
         list(comparison_dir.glob("*.jpg"))
         + list(comparison_dir.glob("*.jpeg"))
         + list(comparison_dir.glob("*.png"))
+        + list(comparison_dir.glob("*.webp"))
     )
     if not comparison_images:
         print(f"Error: No image files found in comparison directory: {comparison_dir}")
@@ -229,6 +241,8 @@ def generate_visualizations(
     output_dir,
     body_mask,
     verbose,
+    show_skeleton=True,
+    show_mask=True,
 ):
     """Generate diagnostic visualizations."""
     if verbose:
@@ -243,12 +257,12 @@ def generate_visualizations(
     # Prepare comparison images and poses for visualization
     comparison_image_arrays = []
     comparison_poses_data = []
-    
+
     for img_path in comparison_images:
         try:
             img_array = load_image(str(img_path))
             comparison_image_arrays.append((str(img_path), img_array))
-            
+
             # Extract poses for skeleton drawing
             comp_poses = estimator.extract_poses(img_array, str(img_path))
             if comp_poses:
@@ -260,7 +274,7 @@ def generate_visualizations(
         except Exception as e:
             comparison_image_arrays.append((str(img_path), None))
             comparison_poses_data.append(None)
-    
+
     # Create main comparison visualization
     vis_output_path = (
         output_dir / f"pose_comparison_{Path(target_pose.image_path).stem}.jpg"
@@ -272,8 +286,9 @@ def generate_visualizations(
         comparison_image_arrays,
         comparison_poses_data,
         str(vis_output_path),
-        apply_body_mask=body_mask,
+        apply_body_mask=show_mask and body_mask,
         pose_estimator=estimator,
+        show_skeleton=show_skeleton,
     )
 
     # Create detailed analysis for top result
@@ -453,15 +468,22 @@ def main():
 
         # Generate visualizations
         if args.visualize:
+            # Limit results for visualization based on max_results
+            limited_results = (
+                results[: args.max_results] if args.max_results else results
+            )
+
             generate_visualizations(
                 estimator,
                 target_image,
                 target_pose,
-                results,
+                limited_results,
                 comparison_images,
                 args.output_dir,
                 args.body_mask,
                 args.verbose,
+                show_skeleton=not args.no_skeleton,
+                show_mask=not args.no_mask,
             )
 
         # Save results

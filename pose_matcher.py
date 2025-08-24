@@ -176,9 +176,9 @@ class PoseMatcher:
         min_region_keypoints = 2
         for region_name, count in region_completeness.items():
             if count < min_region_keypoints:
-                print(
-                    f"REJECTING: {region_name} only has {count} keypoints (need {min_region_keypoints}+)"
-                )
+                # print(
+                #     f"REJECTING: {region_name} only has {count} keypoints (need {min_region_keypoints}+)"
+                # )
                 return 0.0
 
         # Uncomment for debugging if needed

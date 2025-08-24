@@ -8,7 +8,6 @@ import cv2
 import numpy as np
 from pathlib import Path
 from typing import List, Tuple, Optional
-import matplotlib.pyplot as plt
 
 from utils.pose_utils import PoseData, SimilarityResult
 
@@ -59,8 +58,8 @@ class PoseVisualizer:
         # Colors for different elements
         self.colors = {
             "keypoint": (0, 255, 0),  # Green keypoints
-            "skeleton": (255, 0, 0),  # Red skeleton lines
-            "bbox": (0, 0, 255),  # Blue bounding boxes
+            "skeleton": (255, 0, 0),  # Blue skeleton lines
+            "bbox": (0, 0, 255),  # Red bounding boxes
             "text": (255, 255, 255),  # White text
             "background": (0, 0, 0),  # Black background for text
         }
@@ -73,7 +72,7 @@ class PoseVisualizer:
         show_skeleton: bool = True,
         show_bbox: bool = True,
         show_confidence: bool = True,
-        keypoint_size: int = 4,
+        keypoint_size: int = 2,
         line_thickness: int = 2,
     ) -> np.ndarray:
         """
@@ -203,6 +202,7 @@ class PoseVisualizer:
         max_images_per_row: int = 3,
         apply_body_mask: bool = False,
         pose_estimator=None,
+        show_skeleton: bool = True,
     ) -> np.ndarray:
         """
         Create a comprehensive visualization showing target pose and comparison results.
@@ -212,14 +212,27 @@ class PoseVisualizer:
             target_pose: Target pose data
             comparison_results: List of similarity results
             comparison_images: List of (path, image_array) tuples
+            comparison_poses_data: List of pose data for comparison images
             output_path: Optional path to save the visualization
             max_images_per_row: Maximum images per row in the grid
+            apply_body_mask: Whether to apply body segmentation masks
+            pose_estimator: Pose estimator instance for masking
+            show_skeleton: Whether to draw skeletons on comparison images (target always shows skeleton)
 
         Returns:
             Visualization image
         """
         # Draw target pose and resize to HD
-        target_vis = self.draw_pose_on_image(target_image, target_pose)
+        target_vis = self.draw_pose_on_image(
+            target_image,
+            target_pose,
+            show_keypoints=True,
+            show_skeleton=True,
+            show_bbox=True,
+            show_confidence=True,
+            keypoint_size=3,
+            line_thickness=2,
+        )
         target_vis = self._resize_to_hd_with_padding(target_vis)
 
         # Prepare comparison visualizations - ONLY for images that passed filtering
@@ -292,11 +305,11 @@ class PoseVisualizer:
                             hd_img,
                             scaled_pose,
                             show_keypoints=True,
-                            show_skeleton=True,
+                            show_skeleton=show_skeleton,
                             show_bbox=False,
                             show_confidence=False,
-                            keypoint_size=8,
-                            line_thickness=3,
+                            keypoint_size=4,
+                            line_thickness=2,
                         )
 
                 comparison_vis.append(hd_img)
@@ -346,20 +359,26 @@ class PoseVisualizer:
             # Use the pose data directly from the result if available
             if top_result.comparison_pose:
                 overlay_pose = top_result.comparison_pose
+
             else:
                 # Fallback: find corresponding pose data for overlay
+
                 for i, (img_path, _) in enumerate(comparison_images):
                     if str(img_path) == top_result.comparison_image:
                         if comparison_poses_data and i < len(comparison_poses_data):
                             overlay_pose = comparison_poses_data[i]
+
                             break
 
             if overlay_pose and overlay_pose.keypoints:
+
                 # Create overlay image
                 overlay_img = self.create_winning_pose_overlay(
                     target_image, target_pose, overlay_pose, top_result.similarity_score
                 )
                 # Overlay is already HD resolution, no need to resize
+            else:
+                pass
 
         # Place overlay image first (if available)
         if overlay_img is not None:
@@ -469,16 +488,22 @@ class PoseVisualizer:
         # Start with target image and resize to HD
         overlay_img = self._resize_to_hd_with_padding(target_image.copy())
 
-        # Draw target pose in blue on HD image
+        # Scale target pose to HD resolution before drawing
+        target_h, target_w = target_image.shape[:2]
+        hd_target_pose = self._scale_pose_to_hd(
+            target_pose, (target_h, target_w), (1920, 1080)
+        )
+
+        # Draw target pose in blue on HD image using HD-scaled coordinates
         target_vis = self.draw_pose_on_image(
             overlay_img,
-            target_pose,
+            hd_target_pose,
             show_keypoints=True,
             show_skeleton=True,
             show_bbox=False,
             show_confidence=False,
-            keypoint_size=8,
-            line_thickness=4,
+            keypoint_size=4,
+            line_thickness=2,
         )
 
         # Draw winning pose skeleton aligned to target pose (overlay on target image)
@@ -486,11 +511,73 @@ class PoseVisualizer:
             # Use different colors for overlay
             overlay_colors = {
                 "keypoint": (0, 255, 255),  # Yellow keypoints for winning pose
-                "skeleton": (0, 165, 255),  # Orange skeleton lines for winning pose
+                "skeleton": (255, 0, 0),  # Blue skeleton lines for winning pose
             }
 
-            # Transform winning pose to align with target pose
-            aligned_keypoints = self._align_pose_to_target(winning_pose, target_pose)
+            # The winning pose coordinates are from its own image, not the target image
+            # We need to load the actual winning image to get the correct coordinate system
+            try:
+                from utils.image_utils import load_image
+
+                winning_image = load_image(winning_pose.image_path)
+                winning_h, winning_w = winning_image.shape[:2]
+
+                # The winning pose needs to be scaled to match the target image's HD transformation
+                # First, let's see how the target image was transformed to HD
+                target_h, target_w = target_image.shape[:2]
+
+                # Calculate how the target image was scaled to HD (same logic as _resize_to_hd_with_padding)
+                target_scale_w = 1920 / target_w
+                target_scale_h = 1080 / target_h
+                target_scale = min(target_scale_w, target_scale_h)
+
+                # Calculate target image's new dimensions and padding
+                target_new_w = int(target_w * target_scale)
+                target_new_h = int(target_h * target_scale)
+                target_x_offset = (1920 - target_new_w) // 2
+                target_y_offset = (1080 - target_new_h) // 2
+
+                # Instead of just scaling, we need to ALIGN the winning pose to the target pose
+                # First, scale both poses to HD using their respective transformations
+                hd_target_pose = self._scale_pose_to_hd(
+                    target_pose, (target_h, target_w), (1920, 1080)
+                )
+                hd_winning_pose = self._scale_pose_to_hd(
+                    winning_pose, (winning_h, winning_w), (1920, 1080)
+                )
+
+                # Now align the winning pose to the target pose using the existing alignment function
+                # This will transform the winning pose to match the target pose's position and orientation
+                aligned_keypoints = self._align_pose_to_target(
+                    hd_winning_pose, hd_target_pose
+                )
+
+                if aligned_keypoints is None:
+                    print("Alignment failed, falling back to scaled coordinates")
+                    # Fallback: use scaled coordinates but center them on the target pose
+                    target_center = self._get_pose_center(hd_target_pose.keypoints)
+                    winning_center = self._get_pose_center(hd_winning_pose.keypoints)
+
+                    if target_center and winning_center:
+                        # Calculate offset to move winning pose to target center
+                        offset_x = target_center[0] - winning_center[0]
+                        offset_y = target_center[1] - winning_center[1]
+
+                        aligned_keypoints = []
+                        for kp in hd_winning_pose.keypoints:
+                            if kp is not None:
+                                x, y, conf = kp
+                                aligned_keypoints.append(
+                                    (x + offset_x, y + offset_y, conf)
+                                )
+                            else:
+                                aligned_keypoints.append(None)
+                    else:
+                        aligned_keypoints = hd_winning_pose.keypoints
+
+            except Exception as e:
+                print(f"Failed to load winning image: {e}")
+                return target_vis
 
             if aligned_keypoints:
                 # Draw skeleton connections for aligned winning pose
@@ -514,7 +601,7 @@ class PoseVisualizer:
                                 start_coord,
                                 end_coord,
                                 overlay_colors["skeleton"],
-                                3,
+                                2,
                             )
 
                 # Draw keypoints for aligned winning pose
@@ -525,9 +612,9 @@ class PoseVisualizer:
 
                         # Draw keypoint circle
                         cv2.circle(
-                            target_vis, center, 6, overlay_colors["keypoint"], -1
+                            target_vis, center, 3, overlay_colors["keypoint"], -1
                         )
-                        cv2.circle(target_vis, center, 6, (0, 0, 0), 2)  # Black border
+                        cv2.circle(target_vis, center, 3, (0, 0, 0), 1)  # Black border
 
         # Add legend and similarity score (adjusted for HD resolution)
         legend_y = 80
@@ -564,13 +651,13 @@ class PoseVisualizer:
         legend_y += 80
         cv2.putText(
             target_vis,
-            "Orange: Best match",
+            "Blue: Best match",
             (40, legend_y),
             cv2.FONT_HERSHEY_SIMPLEX,
             1.5,
-            (0, 165, 255),
+            (255, 0, 0),
             4,
-        )  # Orange text
+        )  # Blue text
 
         # Save if output path provided
         if output_path:
@@ -625,6 +712,21 @@ class PoseVisualizer:
                 aligned_keypoints.append(None)
 
         return aligned_keypoints
+
+    def _get_pose_center(self, keypoints: List) -> Optional[Tuple[float, float]]:
+        """Get the center point of a pose from its keypoints."""
+        valid_keypoints = [kp for kp in keypoints if kp is not None]
+        if not valid_keypoints:
+            return None
+
+        # Calculate center from all valid keypoints
+        x_coords = [kp[0] for kp in valid_keypoints]
+        y_coords = [kp[1] for kp in valid_keypoints]
+
+        center_x = sum(x_coords) / len(x_coords)
+        center_y = sum(y_coords) / len(y_coords)
+
+        return (center_x, center_y)
 
     def _get_torso_keypoints(self, keypoints: List) -> List:
         """Get valid torso keypoints (shoulders and hips)."""
@@ -750,180 +852,3 @@ class PoseVisualizer:
         )
 
         return scaled_pose
-
-    def create_keypoint_analysis(
-        self,
-        target_pose: PoseData,
-        comparison_pose: PoseData,
-        similarity_result: SimilarityResult,
-    ) -> np.ndarray:
-        """
-        Create a detailed keypoint analysis visualization.
-
-        Args:
-            target_pose: Target pose data
-            comparison_pose: Comparison pose data
-            similarity_result: Similarity result between poses
-
-        Returns:
-            Analysis visualization image
-        """
-        # Create figure with subplots
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
-
-        # Plot 1: Target pose keypoints
-        self._plot_keypoints(ax1, target_pose, "Target Pose", "green")
-
-        # Plot 2: Comparison pose keypoints
-        self._plot_keypoints(ax2, comparison_pose, "Comparison Pose", "red")
-
-        # Plot 3: Keypoint distance comparison
-        self._plot_keypoint_distances(ax3, similarity_result)
-
-        plt.tight_layout()
-
-        # Convert matplotlib figure to numpy array
-        fig.canvas.draw()
-        buf = fig.canvas.buffer_rgba()
-        img = np.asarray(buf)
-        img = img[:, :, :3]  # Remove alpha channel
-
-        plt.close(fig)
-
-        # Convert RGB to BGR for OpenCV
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-
-        return img
-
-    def _plot_keypoints(self, ax, pose: PoseData, title: str, color: str):
-        """Plot keypoints on a matplotlib axis."""
-        if pose.keypoints is None:
-            ax.text(
-                0.5,
-                0.5,
-                "No keypoints",
-                ha="center",
-                va="center",
-                transform=ax.transAxes,
-            )
-            ax.set_title(title)
-            return
-
-        # Extract valid keypoints
-        valid_kps = [(i, kp) for i, kp in enumerate(pose.keypoints) if kp is not None]
-
-        if not valid_kps:
-            ax.text(
-                0.5,
-                0.5,
-                "No valid keypoints",
-                ha="center",
-                va="center",
-                transform=ax.transAxes,
-            )
-            ax.set_title(title)
-            return
-
-        # Plot keypoints
-        x_coords = [kp[1][0] for kp in valid_kps]
-        y_coords = [kp[1][1] for kp in valid_kps]
-        confidences = [kp[1][2] for kp in valid_kps]
-
-        # Normalize coordinates for better visualization
-        x_norm = [
-            (x - min(x_coords)) / (max(x_coords) - min(x_coords)) for x in x_coords
-        ]
-        y_norm = [
-            (y - min(y_coords)) / (max(y_coords) - min(y_coords)) for y in y_coords
-        ]
-
-        # Plot keypoints with size based on confidence
-        sizes = [conf * 100 for conf in confidences]
-        ax.scatter(x_norm, y_norm, s=sizes, c=color, alpha=0.7)
-
-        # Add keypoint labels
-        for i, (idx, _) in enumerate(valid_kps):
-            ax.annotate(
-                str(idx),
-                (x_norm[i], y_norm[i]),
-                xytext=(5, 5),
-                textcoords="offset points",
-                fontsize=8,
-            )
-
-        # Draw skeleton connections
-        for start_idx, end_idx in self.keypoint_connections:
-            start_kp = next((kp for kp in valid_kps if kp[0] == start_idx), None)
-            end_kp = next((kp for kp in valid_kps if kp[0] == end_idx), None)
-
-            if start_kp and end_kp:
-                start_pos = start_kp[1][:2]
-                end_pos = end_kp[1][:2]
-
-                # Normalize positions
-                start_norm = [
-                    (start_pos[0] - min(x_coords)) / (max(x_coords) - min(x_coords)),
-                    (start_pos[1] - min(y_coords)) / (max(y_coords) - min(y_coords)),
-                ]
-                end_norm = [
-                    (end_pos[0] - min(x_coords)) / (max(x_coords) - min(x_coords)),
-                    (end_pos[1] - min(y_coords)) / (max(y_coords) - min(y_coords)),
-                ]
-
-                ax.plot(
-                    [start_norm[0], end_norm[0]],
-                    [start_norm[1], end_norm[1]],
-                    color=color,
-                    alpha=0.5,
-                    linewidth=1,
-                )
-
-        ax.set_title(f"{title}\nConfidence: {pose.confidence_score:.3f}")
-        ax.set_xlabel("Normalized X")
-        ax.set_ylabel("Normalized Y")
-        ax.grid(True, alpha=0.3)
-
-    def _plot_keypoint_distances(self, ax, similarity_result: SimilarityResult):
-        """Plot keypoint distance comparison."""
-        distances = similarity_result.keypoint_distances
-
-        # Filter out invalid distances (-1)
-        valid_distances = [(i, d) for i, d in enumerate(distances) if d >= 0]
-
-        if not valid_distances:
-            ax.text(
-                0.5,
-                0.5,
-                "No distance data",
-                ha="center",
-                va="center",
-                transform=ax.transAxes,
-            )
-            ax.set_title("Keypoint Distances")
-            return
-
-        indices, dist_values = zip(*valid_distances)
-
-        # Create bar chart
-        bars = ax.bar(indices, dist_values, alpha=0.7, color="blue")
-
-        # Color bars based on distance magnitude
-        for bar, dist in zip(bars, dist_values):
-            if dist < 0.1:
-                bar.set_color("green")  # Good match
-            elif dist < 0.3:
-                bar.set_color("orange")  # Moderate match
-            else:
-                bar.set_color("red")  # Poor match
-
-        ax.set_title(
-            f"Keypoint Distances\nSimilarity: {similarity_result.similarity_score:.3f}"
-        )
-        ax.set_xlabel("Keypoint Index")
-        ax.set_ylabel("Distance")
-        ax.grid(True, alpha=0.3)
-
-        # Add keypoint name labels for major indices
-        major_indices = [0, 5, 6, 11, 12]  # nose, shoulders, hips
-        ax.set_xticks(major_indices)
-        ax.set_xticklabels([self.keypoint_names[i] for i in major_indices], rotation=45)

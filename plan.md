@@ -1,74 +1,50 @@
-# Pose Estimation and Matching System - Project Plan
-
-## Project Overview
-A Python-based system for estimating human poses from images using YOLO v13 and finding similar poses across a dataset.
+# Pose Estimation and Matching System - Technical Reference
 
 ## Project Structure
 ```
 poser/
-├── README.md                 # Comprehensive documentation
-├── plan.md                   # This project plan
-├── requirements.txt          # Python dependencies
-├── main.py                  # Main CLI application
+├── main.py                  # CLI application entry point
 ├── pose_estimator.py        # YOLO pose estimation wrapper
-├── pose_matcher.py          # Pose similarity calculation and matching
-├── pose_visualizer.py       # Diagnostic visualization generation
-├── pose_cache.py            # Pose caching system for performance
-├── test_random_poses.py     # Testing script for development
+├── pose_matcher.py          # Pose similarity calculation
+├── pose_visualizer.py       # Diagnostic visualization
+├── pose_cache.py            # JSON-based pose caching
 ├── utils/                   # Utility modules
-│   ├── __init__.py
 │   ├── image_utils.py       # Image loading and processing
-│   └── pose_utils.py        # Pose data structures and utilities
-├── models/                  # Model-related modules
-│   └── __init__.py
+│   └── pose_utils.py        # Pose data structures
 ├── data/                    # Data directories
-│   └── test_images/         # Sample test images
-├── results/                 # Output results and visualizations
-└── tests/                   # Test modules
-    ├── __init__.py
-    └── test_pose_estimator.py
+└── results/                 # Output results
 ```
 
 ## Core Components
 
-### 1. Pose Estimator (`pose_estimator.py`)
-- YOLO v13 model initialization and management
+### Pose Estimator (`pose_estimator.py`)
+- YOLO v11 model initialization and management
 - Pose keypoint extraction from images
 - Multi-person detection and handling
+- Body segmentation for masking
 - Confidence scoring and filtering
 
-### 2. Pose Matcher (`pose_matcher.py`)
+### Pose Matcher (`pose_matcher.py`)
 - Advanced pose similarity algorithms
 - Position, scale, and orientation invariant comparison
 - Mean Squared Error (MSE) based similarity scoring
 - Best match selection from multiple poses
 
-### 3. Pose Visualizer (`pose_visualizer.py`)
+### Pose Visualizer (`pose_visualizer.py`)
 - Diagnostic visualization generation
 - Pose skeleton drawing and keypoint display
 - Pose alignment and overlay functionality
 - Grid-based comparison visualization
-- HD resolution output with consistent sizing
+- HD resolution output (1920x1080)
 
-### 4. Pose Cache (`pose_cache.py`)
+### Pose Cache (`pose_cache.py`)
 - JSON-based pose data caching system
 - Image content hashing for unique identification
-- Dramatic performance improvement for subsequent runs
-- Automatic cache management and cleanup
-
-### 4. Image Utils (`utils/image_utils.py`)
-- Image loading and preprocessing
-- Format validation and conversion
-- Batch processing capabilities
-
-### 5. Pose Utils (`utils/pose_utils.py`)
-- Keypoint normalization
-- Pose representation formats
-- Distance metrics and similarity calculations
+- Performance improvement for subsequent runs
 
 ## Data Structures
 
-### Pose Data Structure
+### PoseData
 ```python
 class PoseData:
     keypoints: List[Optional[Tuple[float, float, float]]]  # x, y, confidence
@@ -78,7 +54,7 @@ class PoseData:
     pose_id: str
 ```
 
-### Similarity Score Structure
+### SimilarityResult
 ```python
 class SimilarityResult:
     target_image: str
@@ -89,110 +65,51 @@ class SimilarityResult:
     rank: int
 ```
 
-## Implementation Milestones
+## Technical Specifications
 
-### Milestone 1: Core Infrastructure ✅
-- [x] Project structure setup
-- [x] YOLO v13 integration
-- [x] Basic pose estimation pipeline
+### YOLO v11 Keypoints (COCO format)
+17 keypoints: nose, eyes, ears, shoulders, elbows, wrists, hips, knees, ankles
 
-### Milestone 2: Pose Matching ✅
-- [x] Keypoint extraction and normalization
-- [x] Advanced similarity algorithms with pose normalization
-- [x] Multi-person detection and handling
-- [x] Ranking system
+### Pose Quality Filtering
+- Major body region completeness filtering
+- Requires keypoints from all major regions (head, torso, arms, legs)
+- Relative visibility threshold (default: 0.65)
+- Critical keypoint penalties for incomplete poses
 
-### Milestone 3: User Interface ✅
-- [x] Command-line interface
-- [x] Batch processing
-- [x] Results visualization
+### Visualization Controls
+- Configurable skeleton drawing on comparison images
+- Configurable body masking on comparison images
+- Target overlay always shows skeleton
+- HD resolution with consistent sizing
 
-### Milestone 4: Performance and Quality Improvements ✅
-- [x] Pose caching system for faster subsequent runs
-- [x] Advanced pose quality filtering with critical keypoint penalties
-- [x] Relative visibility threshold for meaningful pose comparisons
-- [x] **Major body region completeness filtering** - requires poses to have keypoints from all major body regions (head, torso, arms, legs)
-- [x] Aggressive filtering of incomplete poses (e.g., "shoulders only", "no legs", "no head")
-- [x] HD resolution visualization with consistent sizing
-- [x] Comprehensive diagnostic output
-- [x] Diagnostic image generation
+## CLI Interface
 
-### Milestone 4: Optimization ✅
-- [x] Performance improvements
-- [x] Memory management
-- [x] Error handling
-- [x] Pose alignment algorithms
+### Core Arguments
+- `--target`: Target image path or directory
+- `--comparison-dir`: Directory containing comparison images
+- `--threshold`: Confidence threshold for pose detection
+- `--visualize`: Generate diagnostic visualizations
 
-### Milestone 5: Advanced Visualization ✅
-- [x] Comprehensive diagnostic suite
-- [x] Pose overlay functionality
-- [x] Skeleton drawing on comparison images
-- [x] Grid-based visualization layout
-
-## Current Status
-
-### Completed Features ✅
-- **Core Infrastructure**: Project structure, YOLO integration, pose estimation pipeline
-- **Pose Matching**: Keypoint extraction, normalization, similarity algorithms, ranking
-- **User Interface**: CLI interface, batch processing, results visualization
-- **Optimization**: Performance improvements, memory management, error handling
-- **Multi-Person Detection**: Handles multiple humans in images
-- **Advanced Visualization**: Diagnostic images with pose overlays and skeleton drawing
-
-### Technical Capabilities
-- **Pose Detection**: YOLO v13 with configurable confidence thresholds
-- **Similarity Calculation**: Normalized pose comparison with MSE-based scoring
-- **Quality Filtering**: Advanced pose filtering with critical keypoint penalties
-- **Performance**: Pose caching system for dramatic speed improvements
-- **Visualization**: Comprehensive diagnostic suite with pose overlays and HD resolution
-- **CLI Interface**: Full-featured command-line application with caching controls
-- **Testing**: Automated testing with sample images
+### Visualization Controls
+- `--body-mask`: Apply body segmentation masks
+- `--no-skeleton`: Disable skeleton drawing on comparison images
+- `--no-mask`: Disable body masking on comparison images
 
 ## Dependencies
-- ultralytics (YOLO v13)
+- ultralytics (YOLO v11)
 - opencv-python
 - numpy
 - pillow
-- matplotlib (for visualization)
-- pytest (for testing)
 - torch (PyTorch backend)
 
 ## Usage Examples
 ```bash
 # Basic pose matching
-python3 main.py --target data/target_images/basketball1.jpg --comparison-dir data/comparison_images
+python3 main.py --target data/target_images/image.jpg --comparison-dir data/comparison_images
 
-# With visualization
-python3 main.py --target data/target_images/basketball1.jpg --comparison-dir data/comparison_images --visualize
+# With visualization and masking
+python3 main.py --target data/target_images/image.jpg --comparison-dir data/comparison_images --visualize --body-mask
 
-# With quality filtering and caching
-python3 main.py --target data/target_images/basketball1.jpg --comparison-dir data/comparison_images --relative-visibility-threshold 0.6 --visualize
-
-# Clear cache and run fresh
-python3 main.py --target data/target_images/basketball1.jpg --comparison-dir data/comparison_images --clear-cache --visualize
-
-# Disable caching for always fresh results
-python3 main.py --target data/target_images/basketball1.jpg --comparison-dir data/comparison_images --no-cache --visualize
-
-# Testing with sample images
-python3 test_random_poses.py
+# Control visualization elements
+python3 main.py --target data/target_images/image.jpg --comparison-dir data/comparison_images --visualize --no-skeleton --body-mask
 ```
-
-## Technical Notes
-- YOLO v13 provides 17 COCO format keypoints for human pose estimation
-- Poses are normalized to be position, scale, and orientation invariant
-- Uses Mean Squared Error (MSE) of normalized keypoint distances for similarity
-- Confidence-weighted scoring for robust matching
-- Multi-person detection with automatic best pose selection
-- Advanced visualization with pose overlays and skeleton drawing
-- **Quality Filtering**: Major body region completeness filtering ensures poses have keypoints from all major body regions (head, torso, arms, legs)
-- **Performance**: JSON-based caching system with image content hashing for unique identification
-- **HD Visualization**: All images standardized to 1920x1080 with black padding for consistent sizing
-
-## Next Steps
-The core system is complete and functional. Future enhancements could include:
-- Web interface for easier use
-- Batch processing of multiple target images
-- Export to various formats (CSV, Excel)
-- Integration with other pose estimation models
-- Real-time video processing capabilities
