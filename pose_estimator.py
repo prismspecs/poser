@@ -379,9 +379,8 @@ class PoseEstimator:
             x1, y1, x2, y2 = pose.bounding_box
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
 
-            # Use a tighter bounding box to avoid including nearby objects
-            # Only expand slightly to ensure we capture the full body
-            padding = 10
+            # Expand the bounding box slightly to ensure we capture the full body
+            padding = 20
             x1 = max(0, x1 - padding)
             y1 = max(0, y1 - padding)
             x2 = min(image.shape[1], x2 + padding)
@@ -397,59 +396,25 @@ class PoseEstimator:
             output_image = image.copy()
 
             if results and len(results) > 0 and results[0].masks is not None:
-                # Find the mask that best corresponds to the pose keypoints
-                best_mask = None
-                best_overlap = 0
+                # Get the mask for the pose region
+                mask_data = results[0].masks.data[0].cpu().numpy()
+                mask_data = (mask_data * 255).astype(np.uint8)
 
-                for i, mask in enumerate(results[0].masks.data):
-                    mask_np = mask.cpu().numpy()
-                    mask_np = (mask_np * 255).astype(np.uint8)
+                # Resize mask to match the pose region dimensions
+                if mask_data.shape != pose_region.shape[:2]:
+                    mask_data = cv2.resize(
+                        mask_data, (pose_region.shape[1], pose_region.shape[0])
+                    )
 
-                    # Calculate overlap with pose keypoints
-                    overlap_score = 0
-                    valid_keypoints = 0
+                # Create a full-size mask
+                full_mask = np.zeros(image.shape[:2], dtype=np.uint8)
 
-                    for keypoint in pose.keypoints:
-                        if keypoint is not None:
-                            x, y, _ = keypoint
-                            # Convert to pose region coordinates
-                            rel_x = int(x - x1)
-                            rel_y = int(y - y1)
+                # Place the pose mask in the correct location
+                full_mask[y1:y2, x1:x2] = mask_data
 
-                            # Ensure coordinates are within bounds
-                            if (
-                                0 <= rel_x < pose_region.shape[1]
-                                and 0 <= rel_y < pose_region.shape[0]
-                            ):
-                                if mask_np[rel_y, rel_x] > 127:
-                                    overlap_score += 1
-                                valid_keypoints += 1
-                            else:
-                                # Count as valid but no overlap if out of bounds
-                                valid_keypoints += 1
-
-                    if valid_keypoints > 0:
-                        overlap_ratio = overlap_score / valid_keypoints
-                        if overlap_ratio > best_overlap:
-                            best_overlap = overlap_ratio
-                            best_mask = mask_np
-
-                if best_mask is not None and best_overlap > 0.3:  # At least 30% overlap
-                    # Resize mask to match the pose region dimensions
-                    if best_mask.shape != pose_region.shape[:2]:
-                        best_mask = cv2.resize(
-                            best_mask, (pose_region.shape[1], pose_region.shape[0])
-                        )
-
-                    # Create a full-size mask
-                    full_mask = np.zeros(image.shape[:2], dtype=np.uint8)
-
-                    # Place the pose mask in the correct location
-                    full_mask[y1:y2, x1:x2] = best_mask
-
-                    # Apply mask: keep original image where mask is white, set background color elsewhere
-                    mask_bool = full_mask > 127
-                    output_image[~mask_bool] = background_color
+                # Apply mask: keep original image where mask is white, set background color elsewhere
+                mask_bool = full_mask > 127
+                output_image[~mask_bool] = background_color
 
             return output_image
 
