@@ -83,6 +83,11 @@ def parse_arguments():
         action="store_true",
         help="Create layered visualizations overlaying comparison poses on target image with correct positioning",
     )
+    parser.add_argument(
+        "--batch-process",
+        action="store_true",
+        help="Process all images in target directory sequentially for video frame processing",
+    )
 
     parser.add_argument(
         "--model-size",
@@ -128,6 +133,37 @@ def get_target_image_path(args) -> str:
             if args.verbose:
                 print(f"Using first target image: {Path(target_image_path).name}")
         return target_image_path
+
+    else:
+        print(f"Error: Target path does not exist: {args.target}")
+        sys.exit(1)
+
+
+def get_target_images_for_batch(args) -> List[str]:
+    """Get all target image paths for batch processing."""
+    target_path = Path(args.target)
+
+    if target_path.is_file():
+        if not validate_image_path(args.target):
+            print(f"Error: Invalid target image path: {args.target}")
+            sys.exit(1)
+        return [args.target]
+
+    elif target_path.is_dir():
+        target_images = (
+            list(target_path.glob("*.jpg"))
+            + list(target_path.glob("*.jpeg"))
+            + list(target_path.glob("*.png"))
+            + list(target_path.glob("*.webp"))
+        )
+        if not target_images:
+            print(f"Error: No image files found in target directory: {args.target}")
+            sys.exit(1)
+
+        # Sort images naturally (so frame001.jpg comes before frame010.jpg)
+        target_images.sort(key=lambda x: x.name)
+
+        return [str(img) for img in target_images]
 
     else:
         print(f"Error: Target path does not exist: {args.target}")
@@ -584,6 +620,311 @@ def get_pose_scale(pose):
     return max_dist
 
 
+def process_single_target(
+    target_image_path, estimator, matcher, comparison_data, args, frame_number=None
+):
+    """Process a single target image and return results."""
+    if args.verbose:
+        frame_prefix = f"Frame {frame_number:04d}: " if frame_number is not None else ""
+        print(f"{frame_prefix}Processing target image: {Path(target_image_path).name}")
+
+    target_image = load_image(target_image_path)
+    start_time = time.time()
+    target_poses = estimator.extract_poses(target_image, target_image_path)
+    target_time = time.time() - start_time
+
+    if args.verbose:
+        print(f"Target pose extraction took: {target_time:.2f} seconds")
+
+    if not target_poses:
+        if args.verbose:
+            print("Warning: No poses detected in target image")
+        return None, None, None, target_time
+
+    # Use highest confidence pose as target
+    target_pose = max(target_poses, key=lambda p: p.confidence_score)
+    if args.verbose:
+        if len(target_poses) > 1:
+            print(
+                f"Found {len(target_poses)} people in target image, using highest confidence person"
+            )
+
+    # Process comparison images - handle both cached and non-cached modes
+    if isinstance(comparison_data, dict):  # Cached poses
+        results, total_time, pose_extraction_time, pose_matching_time = (
+            process_comparison_images_with_cache(
+                matcher,
+                target_pose,
+                comparison_data,
+                args.relative_visibility_threshold,
+                args.verbose,
+            )
+        )
+    else:  # Original list of comparison images
+        results, total_time, pose_extraction_time, pose_matching_time = (
+            process_comparison_images(
+                estimator,
+                matcher,
+                target_pose,
+                comparison_data,
+                args.relative_visibility_threshold,
+                args.verbose,
+            )
+        )
+
+    # Sort results
+    results.sort(key=lambda x: x.similarity_score, reverse=True)
+
+    return target_image, target_pose, results, target_time
+
+
+def pre_extract_comparison_poses(estimator, comparison_images, verbose=False):
+    """Pre-extract poses from all comparison images once for efficiency."""
+    comparison_poses_cache = {}
+
+    if verbose:
+        print(
+            f"\n📋 Pre-extracting poses from {len(comparison_images)} comparison images..."
+        )
+
+    for i, img_path in enumerate(comparison_images, 1):
+        if verbose:
+            print(
+                f"   Extracting poses from {i:3d}/{len(comparison_images)}: {img_path.name}"
+            )
+
+        try:
+            comparison_image = load_image(str(img_path))
+            poses = estimator.extract_poses(comparison_image, str(img_path))
+            comparison_poses_cache[str(img_path)] = {
+                "poses": poses,
+                "image": comparison_image,
+            }
+        except Exception as e:
+            if verbose:
+                print(f"   Warning: Failed to extract poses from {img_path.name}: {e}")
+            comparison_poses_cache[str(img_path)] = {"poses": [], "image": None}
+
+    if verbose:
+        total_poses = sum(
+            len(data["poses"]) for data in comparison_poses_cache.values()
+        )
+        print(
+            f"✅ Pre-extraction complete: {total_poses} total poses from {len(comparison_images)} images"
+        )
+
+    return comparison_poses_cache
+
+
+def process_comparison_images_with_cache(
+    matcher,
+    target_pose,
+    comparison_poses_cache,
+    relative_visibility_threshold,
+    verbose=False,
+):
+    """Process comparison images using pre-extracted poses."""
+    results = []
+    comparison_start_time = time.time()
+    total_pose_matching_time = 0.0
+
+    if verbose:
+        print(
+            f"🔄 Matching against {len(comparison_poses_cache)} cached comparison images..."
+        )
+
+    for img_path, cache_data in comparison_poses_cache.items():
+        comparison_poses = cache_data["poses"]
+
+        if comparison_poses:
+            start_time = time.time()
+            best_match = matcher.find_best_match(
+                target_pose, comparison_poses, relative_visibility_threshold
+            )
+            match_time = time.time() - start_time
+            total_pose_matching_time += match_time
+
+            if best_match:
+                results.append(best_match)
+
+    total_time = time.time() - comparison_start_time
+    return (
+        results,
+        total_time,
+        0.0,
+        total_pose_matching_time,
+    )  # pose_extraction_time is 0 since pre-extracted
+
+
+def process_batch_targets(args):
+    """Process all target images in batch mode for video frame processing."""
+    # Get all target images
+    target_images = get_target_images_for_batch(args)
+    comparison_dir = Path(args.comparison_dir)
+
+    if not comparison_dir.exists() or not comparison_dir.is_dir():
+        print(f"Error: Invalid comparison directory: {args.comparison_dir}")
+        sys.exit(1)
+
+    comparison_images = get_comparison_images(comparison_dir)
+
+    print(f"\n🎬 BATCH PROCESSING MODE")
+    print(f"📁 Processing {len(target_images)} target frames")
+    print(f"🎯 Using {len(comparison_images)} comparison images")
+    print(f"📤 Output directory: {args.output_dir}")
+    print("=" * 50)
+
+    # Initialize pose estimator
+    if args.verbose:
+        print("Initializing YOLOv11 pose estimator...")
+
+    if args.clear_cache:
+        from pose_cache import PoseCache
+
+        PoseCache().clear_cache()
+        print("Pose cache cleared.")
+
+    start_time = time.time()
+    estimator = PoseEstimator(
+        confidence_threshold=args.threshold,
+        model_size=args.model_size,
+        use_cache=not args.no_cache,
+    )
+    init_time = time.time() - start_time
+
+    if args.verbose:
+        print(f"Model initialization took: {init_time:.2f} seconds")
+
+    # Pre-extract poses from all comparison images once
+    comparison_poses_cache = pre_extract_comparison_poses(
+        estimator, comparison_images, args.verbose
+    )
+
+    matcher = PoseMatcher()
+
+    # Create output directory structure
+    output_dir = Path(args.output_dir)
+    layer_output_dir = output_dir / "batch_layered_poses"
+    layer_output_dir.mkdir(parents=True, exist_ok=True)
+
+    batch_start_time = time.time()
+    successful_frames = 0
+    failed_frames = 0
+
+    # Process each target image
+    for frame_idx, target_image_path in enumerate(target_images, 1):
+        print(
+            f"\n🎞️ Processing frame {frame_idx:04d}/{len(target_images):04d}: {Path(target_image_path).name}"
+        )
+
+        try:
+            target_image, target_pose, results, target_time = process_single_target(
+                target_image_path,
+                estimator,
+                matcher,
+                comparison_poses_cache,  # Use cached poses instead of comparison_images
+                args,
+                frame_idx,
+            )
+
+            if target_pose is None or not results:
+                print(f"⚠️  Skipping frame {frame_idx:04d}: No pose found or no matches")
+                failed_frames += 1
+                continue
+
+            # Generate layered pose for the best match
+            if results and args.layer_poses:
+                best_result = results[0]
+
+                # Get the comparison image and pose directly from cache
+                comp_img = None
+                comp_pose = None
+
+                cache_data = comparison_poses_cache.get(best_result.comparison_image)
+                if (
+                    cache_data
+                    and cache_data["image"] is not None
+                    and cache_data["poses"]
+                ):
+                    comp_img = cache_data["image"]
+
+                    # Find the specific pose that gave this result
+                    if (
+                        hasattr(best_result, "comparison_pose")
+                        and best_result.comparison_pose
+                    ):
+                        comp_pose = best_result.comparison_pose
+                    else:
+                        # Fallback to highest confidence pose
+                        comp_pose = max(
+                            cache_data["poses"], key=lambda p: p.confidence_score
+                        )
+
+                if comp_pose and comp_img is not None:
+                    # Create sequential frame output name
+                    frame_output_path = (
+                        layer_output_dir
+                        / f"frame_{frame_idx:04d}_{Path(best_result.comparison_image).stem}.png"
+                    )
+
+                    try:
+                        layered_vis = create_layered_pose_visualization(
+                            estimator,
+                            target_image,
+                            target_pose,
+                            comp_img,
+                            comp_pose,
+                            best_result.similarity_score,
+                            str(frame_output_path),
+                        )
+
+                        if layered_vis is not None:
+                            print(
+                                f"✅ Frame {frame_idx:04d} saved: {frame_output_path.name} (similarity: {best_result.similarity_score:.3f})"
+                            )
+                            successful_frames += 1
+                        else:
+                            print(
+                                f"❌ Failed to create layered visualization for frame {frame_idx:04d}"
+                            )
+                            failed_frames += 1
+
+                    except Exception as e:
+                        print(
+                            f"❌ Error creating layered visualization for frame {frame_idx:04d}: {e}"
+                        )
+                        failed_frames += 1
+                else:
+                    print(
+                        f"⚠️  No suitable comparison pose found for frame {frame_idx:04d}"
+                    )
+                    failed_frames += 1
+            else:
+                print(f"⚠️  No results found for frame {frame_idx:04d}")
+                failed_frames += 1
+
+        except Exception as e:
+            print(f"❌ Error processing frame {frame_idx:04d}: {e}")
+            if args.verbose:
+                import traceback
+
+                traceback.print_exc()
+            failed_frames += 1
+
+    # Print batch summary
+    total_time = time.time() - batch_start_time
+    print(f"\n🏁 BATCH PROCESSING COMPLETE")
+    print(f"=" * 50)
+    print(f"✅ Successful frames: {successful_frames}")
+    print(f"❌ Failed frames: {failed_frames}")
+    print(f"⏱️  Total time: {total_time:.2f} seconds")
+    print(f"📊 Average time per frame: {total_time/len(target_images):.2f} seconds")
+    print(f"📁 Output saved to: {layer_output_dir}")
+    print(
+        f"💡 To create video: ffmpeg -framerate 30 -i {layer_output_dir}/frame_%04d_*.png -c:v libx264 -pix_fmt yuv420p output_video.mp4"
+    )
+
+
 def save_results(results, output_path, target_pose):
     """Save results to JSON file."""
     output_data = {
@@ -609,6 +950,14 @@ def main():
     args = parse_arguments()
 
     try:
+        # Check if batch processing mode is enabled
+        if args.batch_process:
+            # Force layer poses for batch processing
+            args.layer_poses = True
+            process_batch_targets(args)
+            return
+
+        # Single image processing mode (original behavior)
         # Get target and comparison paths
         target_image_path = get_target_image_path(args)
         comparison_dir = Path(args.comparison_dir)

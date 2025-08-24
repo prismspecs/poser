@@ -101,6 +101,15 @@ class SimilarityResult:
 - `--no-skeleton`: Disable skeleton drawing (lines + keypoints) on comparison images
 - `--layer-poses`: Create layered visualizations overlaying comparison poses on target image with transparency
 
+### Batch Processing
+- `--batch-process`: Process all images in target directory sequentially for video frame processing
+  - Automatically enables `--layer-poses`
+  - Processes images in sorted order (natural filename sorting)
+  - Creates sequential frame outputs with format: `frame_XXXX_[comparison_name].png`
+  - Saves outputs to `results/batch_layered_poses/` directory
+  - Provides progress tracking and timing statistics
+  - Includes FFmpeg command suggestion for video creation
+
 ## Dependencies
 - ultralytics (YOLO v11)
 - opencv-python
@@ -121,4 +130,22 @@ python3 main.py --target data/target_images/image.jpg --comparison-dir data/comp
 
 # Create layered pose overlays with transparency
 python3 main.py --target data/target_images/image.jpg --comparison-dir data/comparison_images --visualize --layer-poses
+
+# Batch process video frames for video creation
+python3 main.py --target data/input_frames/ --comparison-dir data/comparison_images --batch-process --verbose
+
+# Batch process with custom output directory
+python3 main.py --target data/input_frames/ --comparison-dir data/comparison_images --batch-process --output-dir results_custom
+```
+
+## Video Frame Processing Workflow
+```bash
+# 1. Extract frames from video (if needed)
+ffmpeg -i input_video.mp4 -vf fps=30 data/input_frames/frame_%04d.jpg
+
+# 2. Process frames with pose matching
+python3 main.py --target data/input_frames/ --comparison-dir data/comparison_images --batch-process --verbose
+
+# 3. Create output video from processed frames
+ffmpeg -framerate 30 -i results/batch_layered_poses/frame_%04d_*.png -c:v libx264 -pix_fmt yuv420p output_video.mp4
 ```

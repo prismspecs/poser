@@ -48,8 +48,10 @@ Thumbs.db
 # Project specific
 data/target_images/*
 data/comparison_images/*
+data/input_frames/*
 !data/target_images/.gitkeep
 !data/comparison_images/.gitkeep
+!data/input_frames/.gitkeep
 results/*
 !results/.gitkeep
 models/*
