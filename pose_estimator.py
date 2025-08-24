@@ -11,6 +11,12 @@ from pathlib import Path
 
 from utils.pose_utils import PoseData
 
+try:
+    from pose_cache import PoseCache
+except ImportError:
+    # Fallback if cache module is not available
+    PoseCache = None
+
 
 class PoseEstimator:
     """YOLO v13 pose estimation wrapper."""
@@ -36,17 +42,25 @@ class PoseEstimator:
         "right_ankle",
     ]
 
-    def __init__(self, confidence_threshold: float = 0.5, model_size: str = "n"):
+    def __init__(
+        self,
+        confidence_threshold: float = 0.5,
+        model_size: str = "n",
+        use_cache: bool = True,
+    ):
         """
         Initialize the pose estimator.
 
         Args:
             confidence_threshold: Minimum confidence for pose detection
             model_size: YOLO model size ('n', 's', 'm', 'l', 'x')
+            use_cache: Whether to use pose caching for speed
         """
         self.confidence_threshold = confidence_threshold
         self.model_size = model_size
         self.model = None
+        self.use_cache = use_cache
+        self.cache = PoseCache() if use_cache else None
         self._initialize_model()
 
     def _initialize_model(self):
@@ -77,6 +91,12 @@ class PoseEstimator:
         """
         if self.model is None:
             raise RuntimeError("Model not initialized")
+
+        # Check cache first if enabled
+        if self.use_cache and self.cache:
+            cached_poses = self.cache.get_cached_poses(image_path)
+            if cached_poses is not None:
+                return cached_poses
 
         # Run inference
         results = self.model(image, verbose=False)
@@ -134,6 +154,10 @@ class PoseEstimator:
                         )
 
                         poses.append(pose)
+
+        # Cache the results if enabled
+        if self.use_cache and self.cache:
+            self.cache.cache_poses(image_path, poses)
 
         return poses
 

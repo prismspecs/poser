@@ -34,7 +34,10 @@ class PoseMatcher:
         self.scaler = StandardScaler() if normalize_keypoints else None
 
     def find_best_match(
-        self, target_pose: PoseData, comparison_poses: List[PoseData]
+        self,
+        target_pose: PoseData,
+        comparison_poses: List[PoseData],
+        relative_visibility_threshold: float = 0.6,
     ) -> Optional[SimilarityResult]:
         """
         Find the best matching pose from a list of comparison poses.
@@ -53,13 +56,17 @@ class PoseMatcher:
         best_score = -1
 
         for comparison_pose in comparison_poses:
-            similarity_score = self.calculate_similarity(target_pose, comparison_pose)
+            similarity_score = self.calculate_similarity(
+                target_pose,
+                comparison_pose,
+                relative_visibility_threshold=relative_visibility_threshold,
+            )
 
             if similarity_score > best_score:
                 best_score = similarity_score
                 best_match = comparison_pose
 
-        if best_match is None:
+        if best_match is None or best_score <= 0.0:
             return None
 
         # Calculate detailed similarity result
@@ -71,19 +78,31 @@ class PoseMatcher:
             similarity_score=best_score,
             keypoint_distances=keypoint_distances,
             rank=1,  # Will be updated by caller
+            comparison_pose=best_match,  # Include the actual pose that gave this score
         )
 
-    def calculate_similarity(self, pose1: PoseData, pose2: PoseData) -> float:
+    def calculate_similarity(
+        self,
+        pose1: PoseData,
+        pose2: PoseData,
+        min_visibility_threshold: float = 0.6,
+        relative_visibility_threshold: float = 0.6,
+    ) -> float:
         """
         Calculate similarity between two poses using normalized pose comparison.
 
         Args:
             pose1: First pose
             pose2: Second pose
+            min_visibility_threshold: Minimum percentage of visible keypoints required (0.0 to 1.0)
 
         Returns:
             Similarity score between 0 and 1 (higher is more similar)
         """
+        # Check individual visibility thresholds first
+        if not self._meets_visibility_threshold(pose1, pose2, min_visibility_threshold):
+            return 0.0
+
         # Normalize poses to be position and scale invariant
         norm_pose1 = self._normalize_pose(pose1)
         norm_pose2 = self._normalize_pose(pose2)
@@ -91,14 +110,79 @@ class PoseMatcher:
         if norm_pose1 is None or norm_pose2 is None:
             return 0.0
 
-        # Find common keypoints
+        # Find common keypoints with meaningful confidence
+        # A keypoint is only considered "visible" if it has confidence above a threshold
+        confidence_threshold = (
+            0.3  # Keypoints below this confidence are essentially invisible
+        )
+
         common_indices = []
         for i in range(len(norm_pose1)):
-            if norm_pose1[i] is not None and norm_pose2[i] is not None:
-                common_indices.append(i)
+            if (
+                norm_pose1[i] is not None
+                and norm_pose2[i] is not None
+                and len(norm_pose1[i]) >= 3
+                and len(norm_pose2[i]) >= 3
+            ):
+                # Check confidence of both keypoints
+                conf1 = norm_pose1[i][2] if len(norm_pose1[i]) > 2 else 0.0
+                conf2 = norm_pose2[i][2] if len(norm_pose2[i]) > 2 else 0.0
+
+                # Only consider keypoints with meaningful confidence
+                if conf1 >= confidence_threshold and conf2 >= confidence_threshold:
+                    common_indices.append(i)
 
         if len(common_indices) < 3:  # Need at least 3 points for meaningful comparison
             return 0.0
+
+        # CRITICAL: Check relative visibility - poses must share enough keypoints relative to the target
+        # We want at least 60% of the target's visible keypoints to also be visible in the comparison
+        # But now we only count keypoints with meaningful confidence
+        target_visible_keypoints = sum(
+            1
+            for kp in pose1.keypoints
+            if kp is not None and len(kp) >= 3 and kp[2] >= confidence_threshold
+        )
+        if target_visible_keypoints == 0:
+            return 0.0
+
+        relative_visibility = len(common_indices) / target_visible_keypoints
+
+        # Instead of filtering, let's apply a quality penalty based on keypoint distribution
+        # Poses with only shoulders visible should get penalized in the similarity calculation
+        # We'll do this by reducing the similarity score based on missing keypoints
+
+        if (
+            relative_visibility < relative_visibility_threshold
+        ):  # At least X% of target's keypoints must be shared
+            return 0.0
+
+        # NEW: Check for major body part completeness
+        # A pose must have keypoints from ALL major body regions to be considered complete
+        major_regions = {
+            "head": [0, 1, 2, 3, 4],  # nose, eyes, ears
+            "torso": [5, 6, 11, 12],  # shoulders, hips
+            "arms": [7, 8, 9, 10],  # elbows, wrists
+            "legs": [13, 14, 15, 16],  # knees, ankles
+        }
+
+        # Check if comparison pose has at least 2 keypoints from each major region
+        region_completeness = {}
+        for region_name, region_indices in major_regions.items():
+            region_keypoints = [i for i in common_indices if i in region_indices]
+            region_completeness[region_name] = len(region_keypoints)
+
+        # Require at least 2 keypoints from each major region
+        min_region_keypoints = 2
+        for region_name, count in region_completeness.items():
+            if count < min_region_keypoints:
+                print(
+                    f"REJECTING: {region_name} only has {count} keypoints (need {min_region_keypoints}+)"
+                )
+                return 0.0
+
+        # Uncomment for debugging if needed
+        # print(f"REGION COMPLETENESS: {region_completeness}")
 
         # Calculate normalized distances for common keypoints
         distances = []
@@ -134,6 +218,51 @@ class PoseMatcher:
         # Scale factor chosen so that MSE of 0.1 gives ~60% similarity, MSE of 0.5 gives ~14% similarity
         scale_factor = 0.2
         similarity = np.exp(-mse / scale_factor)
+
+        # Apply penalty for missing keypoints
+        # The more keypoints we're missing, the more we penalize the similarity
+        total_keypoints = len(pose1.keypoints)
+        missing_penalty = (total_keypoints - len(common_indices)) / total_keypoints
+        similarity *= (
+            1.0 - missing_penalty * 0.5
+        )  # Reduce similarity by up to 50% for missing keypoints
+
+        # Additional quality penalty: penalize poses missing keypoints from important body regions
+        # Critical regions: torso (shoulders + hips), arms (elbows), legs (knees)
+        critical_indices = [
+            5,
+            6,
+            11,
+            12,
+            7,
+            8,
+            13,
+            14,
+        ]  # shoulders, hips, elbows, knees
+        critical_common = [i for i in common_indices if i in critical_indices]
+        critical_penalty = (
+            8 - len(critical_common)
+        ) / 8  # Penalty for missing critical keypoints
+
+        # Apply critical penalty much more aggressively (up to 95% reduction)
+        # This should effectively filter out poses with only shoulders visible
+        similarity *= 1.0 - critical_penalty * 0.95
+
+        # Uncomment for debugging if needed
+        # print(f"\n=== POSE COMPARISON DEBUG ===")
+        # print(f"Target: {pose1.image_path}")
+        # print(f"Comparison: {pose2.image_path}")
+        # print(f"Missing keypoint penalty: {missing_penalty:.4f} -> Factor: {1.0 - missing_penalty * 0.5:.4f}")
+        # print(f"Critical keypoints: {len(critical_common)}/8 (need 6+)")
+        # print(f"Critical penalty: {critical_penalty:.4f} -> Factor: {1.0 - critical_penalty * 0.95:.4f}")
+        # print(f"Final similarity: {similarity:.4f}")
+        # print(f"Target visible keypoints: {target_visible_keypoints}")
+        # print(f"Comparison visible keypoints: {sum(1 for kp in pose2.keypoints if kp is not None)}")
+        # print(f"Common keypoints: {len(common_indices)}")
+        # print(f"Relative visibility: {relative_visibility:.4f}")
+        # print(f"Common keypoint indices: {sorted(common_indices)}")
+        # print(f"Missing keypoint indices: {sorted(set(range(17)) - set(common_indices))}")
+        # print("=" * 50)
 
         # Ensure similarity is between 0 and 1
         similarity = max(0.0, min(1.0, similarity))
@@ -337,3 +466,30 @@ class PoseMatcher:
             self.scaler = StandardScaler()
         elif not normalize:
             self.scaler = None
+
+    def _meets_visibility_threshold(
+        self, pose1: PoseData, pose2: PoseData, min_threshold: float
+    ) -> bool:
+        """
+        Check if both poses meet the minimum visibility threshold.
+
+        Args:
+            pose1: First pose
+            pose2: Second pose
+            min_threshold: Minimum percentage of visible keypoints required (0.0 to 1.0)
+
+        Returns:
+            True if both poses have enough visible keypoints for meaningful comparison
+        """
+        # Count visible keypoints in each pose
+        visible1 = sum(1 for kp in pose1.keypoints if kp is not None)
+        visible2 = sum(1 for kp in pose2.keypoints if kp is not None)
+
+        total_keypoints = len(pose1.keypoints)
+
+        # Calculate visibility percentages
+        visibility1 = visible1 / total_keypoints if total_keypoints > 0 else 0.0
+        visibility2 = visible2 / total_keypoints if total_keypoints > 0 else 0.0
+
+        # Both poses must meet the threshold
+        return visibility1 >= min_threshold and visibility2 >= min_threshold

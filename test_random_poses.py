@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Random pose testing script.
-Randomly selects one image from test_images as target and compares it against the rest.
+Randomly selects one image from target_images as target and compares it against comparison_images.
 """
 
 import os
@@ -16,19 +16,19 @@ sys.path.append(str(Path(__file__).parent))
 from main import main as run_pose_estimation
 
 
-def get_test_images():
-    """Get all image files from the test_images directory."""
-    test_dir = Path("data/test_images")
+def get_target_images():
+    """Get all image files from the target_images directory."""
+    target_dir = Path("data/target_images")
 
-    if not test_dir.exists():
-        print(f"❌ Test images directory not found: {test_dir}")
+    if not target_dir.exists():
+        print(f"❌ Target images directory not found: {target_dir}")
         return []
 
     # Get all image files (excluding .avi and other non-image files)
     image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
     image_files = []
 
-    for file_path in test_dir.iterdir():
+    for file_path in target_dir.iterdir():
         if file_path.is_file() and file_path.suffix.lower() in image_extensions:
             image_files.append(file_path)
 
@@ -40,39 +40,36 @@ def main():
     print("🎲 Random Pose Testing")
     print("=" * 40)
 
-    # Get all test images
-    test_images = get_test_images()
+    # Get all target images
+    target_images = get_target_images()
 
-    if not test_images:
-        print("❌ No test images found!")
-        print("💡 Please add some images to data/test_images/")
+    if not target_images:
+        print("❌ No target images found!")
+        print("💡 Please add some images to data/target_images/")
         return
 
-    print(f"📁 Found {len(test_images)} test images:")
-    for i, img in enumerate(test_images, 1):
+    print(f"📁 Found {len(target_images)} target images:")
+    for i, img in enumerate(target_images, 1):
         print(f"   {i}. {img.name}")
 
     # Randomly select one as target
-    target_image = random.choice(test_images)
+    target_image = random.choice(target_images)
     print(f"\n🎯 Randomly selected target: {target_image.name}")
 
-    # Create comparison directory with remaining images
-    comparison_dir = Path("data/comparison_temp")
-    if comparison_dir.exists():
-        shutil.rmtree(comparison_dir)
-    comparison_dir.mkdir(exist_ok=True)
+    # Use the comparison_images directory directly
+    comparison_dir = Path("data/comparison_images")
+    if not comparison_dir.exists():
+        print(f"❌ Comparison images directory not found: {comparison_dir}")
+        return
 
-    # Copy remaining images to comparison directory
-    comparison_images = []
-    for img in test_images:
-        if img != target_image:
-            comparison_path = comparison_dir / img.name
-            shutil.copy2(img, comparison_path)
-            comparison_images.append(comparison_path)
+    # Count comparison images
+    comparison_images = (
+        list(comparison_dir.glob("*.jpg"))
+        + list(comparison_dir.glob("*.jpeg"))
+        + list(comparison_dir.glob("*.png"))
+    )
 
-    print(f"📊 Comparing against {len(comparison_images)} images:")
-    for img in comparison_images:
-        print(f"   - {img.name}")
+    print(f"📊 Found {len(comparison_images)} comparison images in database")
 
     # Run pose estimation
     print(f"\n🚀 Running pose estimation...")
@@ -94,11 +91,9 @@ def main():
         run_pose_estimation()
     except Exception as e:
         print(f"❌ Error during pose estimation: {e}")
-    finally:
-        # Clean up temporary comparison directory
-        if comparison_dir.exists():
-            shutil.rmtree(comparison_dir)
-            print(f"\n🧹 Cleaned up temporary files")
+        import traceback
+
+        traceback.print_exc()
 
 
 if __name__ == "__main__":

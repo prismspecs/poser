@@ -7,6 +7,7 @@ Finds the closest pose match between a target image and comparison images.
 import argparse
 import json
 import sys
+import random
 from pathlib import Path
 from typing import List, Dict, Any
 import cv2
@@ -24,10 +25,19 @@ def parse_arguments():
         description="Find closest pose match using YOLO v13 pose estimation"
     )
     parser.add_argument(
-        "--target", required=True, help="Path to target image for pose matching"
+        "--target",
+        required=True,
+        help="Path to target image OR directory of target images for pose matching",
     )
     parser.add_argument(
-        "--comparison-dir", required=True, help="Directory containing comparison images"
+        "--comparison-dir",
+        required=True,
+        help="Directory containing comparison images to search through",
+    )
+    parser.add_argument(
+        "--random-target",
+        action="store_true",
+        help="Randomly select target image if target is a directory",
     )
     parser.add_argument(
         "--threshold",
@@ -41,6 +51,28 @@ def parse_arguments():
         type=int,
         default=10,
         help="Maximum number of results to return (default: 10)",
+    )
+    parser.add_argument(
+        "--visibility-threshold",
+        type=float,
+        default=0.7,
+        help="Minimum percentage of visible keypoints required for comparison (0.0 to 1.0, default: 0.7)",
+    )
+    parser.add_argument(
+        "--relative-visibility-threshold",
+        type=float,
+        default=0.6,
+        help="Minimum percentage of target's visible keypoints that must be shared in comparison (0.0 to 1.0, default: 0.6)",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable pose caching (slower but always fresh results)",
+    )
+    parser.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Clear the pose cache before running",
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     parser.add_argument(
@@ -61,9 +93,37 @@ def main():
     """Main application entry point."""
     args = parse_arguments()
 
-    # Validate target image
-    if not validate_image_path(args.target):
-        print(f"Error: Invalid target image path: {args.target}")
+    # Handle target (can be single image or directory)
+    target_path = Path(args.target)
+    if target_path.is_file():
+        # Single target image
+        if not validate_image_path(args.target):
+            print(f"Error: Invalid target image path: {args.target}")
+            sys.exit(1)
+        target_image_path = args.target
+    elif target_path.is_dir():
+        # Directory of target images
+        target_images = (
+            list(target_path.glob("*.jpg"))
+            + list(target_path.glob("*.jpeg"))
+            + list(target_path.glob("*.png"))
+        )
+        if not target_images:
+            print(f"Error: No image files found in target directory: {args.target}")
+            sys.exit(1)
+
+        if args.random_target:
+            # Randomly select target image
+            target_image_path = str(random.choice(target_images))
+            if args.verbose:
+                print(f"Randomly selected target: {Path(target_image_path).name}")
+        else:
+            # Use first image
+            target_image_path = str(target_images[0])
+            if args.verbose:
+                print(f"Using first target image: {Path(target_image_path).name}")
+    else:
+        print(f"Error: Target path does not exist: {args.target}")
         sys.exit(1)
 
     # Validate comparison directory
@@ -77,14 +137,24 @@ def main():
         if args.verbose:
             print("Initializing YOLO v13 pose estimator...")
 
-        estimator = PoseEstimator(confidence_threshold=args.threshold)
+        use_cache = not args.no_cache
+        if args.clear_cache:
+            from pose_cache import PoseCache
+
+            cache = PoseCache()
+            cache.clear_cache()
+            print("Pose cache cleared.")
+
+        estimator = PoseEstimator(
+            confidence_threshold=args.threshold, use_cache=use_cache
+        )
 
         # Load target image and extract pose
         if args.verbose:
-            print(f"Processing target image: {args.target}")
+            print(f"Processing target image: {target_image_path}")
 
-        target_image = load_image(args.target)
-        target_poses = estimator.extract_poses(target_image, args.target)
+        target_image = load_image(target_image_path)
+        target_poses = estimator.extract_poses(target_image, target_image_path)
 
         if not target_poses:
             print("Error: No poses detected in target image")
@@ -145,7 +215,11 @@ def main():
                         )
 
                     # Find best match among all people in this image
-                    best_match = matcher.find_best_match(target_pose, comparison_poses)
+                    best_match = matcher.find_best_match(
+                        target_pose,
+                        comparison_poses,
+                        args.relative_visibility_threshold,
+                    )
                     if best_match:
                         results.append(best_match)
 
@@ -157,8 +231,9 @@ def main():
         # Sort results by similarity score (descending)
         results.sort(key=lambda x: x.similarity_score, reverse=True)
 
-        # Limit results
-        results = results[: args.max_results]
+        # Store all results for visualization, but limit display
+        all_results = results.copy()
+        display_results = results[: args.max_results]
 
         # Update comparison_poses_data with the best matching poses for visualization
         if args.visualize:
@@ -178,7 +253,10 @@ def main():
                                 best_score = -1
                                 for pose in comp_poses:
                                     score = matcher.calculate_similarity(
-                                        target_pose, pose
+                                        target_pose,
+                                        pose,
+                                        args.visibility_threshold,
+                                        args.relative_visibility_threshold,
                                     )
                                     if (
                                         abs(score - result.similarity_score) < 0.001
@@ -188,15 +266,37 @@ def main():
 
                                 if best_pose and i < len(comparison_poses_data):
                                     comparison_poses_data[i] = best_pose
-                        except:
+                                    print(
+                                        f"Updated comparison_poses_data[{i}] with best pose from {img_path.name} (score: {result.similarity_score:.3f})"
+                                    )
+                                else:
+                                    print(
+                                        f"Warning: Could not find matching pose for {img_path.name} with score {result.similarity_score:.3f}"
+                                    )
+                                    # Fallback: use the highest confidence pose
+                                    if comp_poses:
+                                        fallback_pose = max(
+                                            comp_poses, key=lambda p: p.confidence_score
+                                        )
+                                        comparison_poses_data[i] = fallback_pose
+                                        print(
+                                            f"Using fallback pose (highest confidence) for {img_path.name}"
+                                        )
+                        except Exception as e:
+                            if args.verbose:
+                                print(
+                                    f"Warning: Failed to update pose data for {img_path.name}: {e}"
+                                )
                             continue
                         break
 
-        # Display results
-        print(f"\nFound {len(results)} pose matches:")
+        # Display results (limited by max_results)
+        print(
+            f"\nFound {len(all_results)} pose matches, showing top {len(display_results)}:"
+        )
         print("-" * 80)
 
-        for i, result in enumerate(results, 1):
+        for i, result in enumerate(display_results, 1):
             print(f"{i:2d}. {Path(result.comparison_image).name}")
             print(f"    Similarity Score: {result.similarity_score:.3f}")
             print(f"    Rank: {result.rank}")
@@ -244,7 +344,7 @@ def main():
                 main_vis = visualizer.create_comparison_visualization(
                     target_image,
                     target_pose,
-                    results,
+                    results,  # Use only filtered results for visualization
                     comparison_image_arrays,
                     comparison_poses_data,
                     str(vis_output_path),

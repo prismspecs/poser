@@ -218,13 +218,15 @@ class PoseVisualizer:
         Returns:
             Visualization image
         """
-        # Draw target pose
+        # Draw target pose and resize to HD
         target_vis = self.draw_pose_on_image(target_image, target_pose)
+        target_vis = self._resize_to_hd_with_padding(target_vis)
 
-        # Prepare comparison visualizations
+        # Prepare comparison visualizations - ONLY for images that passed filtering
         comparison_vis = []
         comparison_poses = []  # Store pose data for potential overlay
 
+        # Only process images that are in comparison_results (these passed the filtering)
         for i, result in enumerate(comparison_results):
             # Find corresponding image
             img_name = Path(result.comparison_image).name
@@ -234,65 +236,70 @@ class PoseVisualizer:
             for j, (img_path, img_array) in enumerate(comparison_images):
                 if Path(img_path).name == img_name and img_array is not None:
                     comp_img = img_array
-                    # Get corresponding pose data if available
-                    if comparison_poses_data and j < len(comparison_poses_data):
+                    # Use the pose data directly from the result if available
+                    if result.comparison_pose:
+                        comp_pose = result.comparison_pose
+                    # Fallback to comparison_poses_data if needed
+                    elif comparison_poses_data and j < len(comparison_poses_data):
                         comp_pose = comparison_poses_data[j]
                     break
 
             if comp_img is not None:
-                # Draw similarity score on image
-                vis_img = comp_img.copy()
+                # First resize to HD resolution with black padding
+                hd_img = self._resize_to_hd_with_padding(comp_img)
 
-                # Add similarity score text (smaller font)
+                # Now draw similarity score text on the HD image
                 text = f"{result.similarity_score:.3f}"
                 cv2.putText(
-                    vis_img,
+                    hd_img,
                     text,
-                    (10, 25),
+                    (20, 50),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
+                    1.0,
                     (255, 255, 255),
-                    2,
+                    3,
                 )
                 cv2.putText(
-                    vis_img, text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3
+                    hd_img, text, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 4
                 )
 
-                # Draw skeleton if pose data is available
+                # Draw skeleton if pose data is available (on HD image)
                 if comp_pose and comp_pose.keypoints:
-                    vis_img = self.draw_pose_on_image(
-                        vis_img,
-                        comp_pose,
-                        show_keypoints=True,
-                        show_skeleton=True,
-                        show_bbox=False,
-                        show_confidence=False,
-                        keypoint_size=4,
-                        line_thickness=2,
+                    # Scale pose keypoints to HD resolution
+                    scaled_pose = self._scale_pose_to_hd(
+                        comp_pose, comp_img.shape, (1920, 1080)
                     )
+                    if scaled_pose:
+                        hd_img = self.draw_pose_on_image(
+                            hd_img,
+                            scaled_pose,
+                            show_keypoints=True,
+                            show_skeleton=True,
+                            show_bbox=False,
+                            show_confidence=False,
+                            keypoint_size=8,
+                            line_thickness=3,
+                        )
 
-                comparison_vis.append(vis_img)
+                comparison_vis.append(hd_img)
                 comparison_poses.append(result)  # Store for potential use
 
-        # Resize all comparison images to consistent higher resolution
-        if comparison_vis:
-            # Use a higher standard resolution (800x600)
-            target_width, target_height = 800, 600
-
-            # Resize target image
-            target_vis = cv2.resize(target_vis, (target_width, target_height))
-
-            # Resize all comparison images
-            for i in range(len(comparison_vis)):
-                comparison_vis[i] = cv2.resize(
-                    comparison_vis[i], (target_width, target_height)
-                )
+        # All images are now HD resolution (1920x1080)
+        target_width, target_height = 1920, 1080
 
         # Create grid layout with overlay image
         n_comparisons = len(comparison_vis)
         # Add 1 for the overlay image (target + winning pose skeleton)
         n_total_images = n_comparisons + 1
-        n_rows = (n_total_images + max_images_per_row - 1) // max_images_per_row
+
+        # Dynamically adjust grid size for large numbers of images
+        if n_comparisons > 20:
+            # For large datasets, use more columns to keep grid manageable
+            actual_max_cols = min(6, max_images_per_row * 2)
+        else:
+            actual_max_cols = max_images_per_row
+
+        n_rows = (n_total_images + actual_max_cols - 1) // actual_max_cols
 
         if n_comparisons == 0:
             return target_vis
@@ -302,7 +309,7 @@ class PoseVisualizer:
 
         # Create grid
         grid_height = img_height + n_rows * img_height
-        grid_width = max_images_per_row * img_width
+        grid_width = actual_max_cols * img_width
 
         # Create grid image
         grid_img = np.zeros((grid_height, grid_width, 3), dtype=np.uint8)
@@ -318,20 +325,23 @@ class PoseVisualizer:
             top_result = comparison_results[0]
             overlay_pose = None
 
-            # Find corresponding pose data for overlay
-            for i, (img_path, _) in enumerate(comparison_images):
-                if str(img_path) == top_result.comparison_image:
-                    if comparison_poses_data and i < len(comparison_poses_data):
-                        overlay_pose = comparison_poses_data[i]
-                        break
+            # Use the pose data directly from the result if available
+            if top_result.comparison_pose:
+                overlay_pose = top_result.comparison_pose
+            else:
+                # Fallback: find corresponding pose data for overlay
+                for i, (img_path, _) in enumerate(comparison_images):
+                    if str(img_path) == top_result.comparison_image:
+                        if comparison_poses_data and i < len(comparison_poses_data):
+                            overlay_pose = comparison_poses_data[i]
+                            break
 
             if overlay_pose and overlay_pose.keypoints:
                 # Create overlay image
                 overlay_img = self.create_winning_pose_overlay(
                     target_image, target_pose, overlay_pose, top_result.similarity_score
                 )
-                # Resize overlay to match grid size
-                overlay_img = cv2.resize(overlay_img, (img_width, img_height))
+                # Overlay is already HD resolution, no need to resize
 
         # Place overlay image first (if available)
         if overlay_img is not None:
@@ -348,8 +358,8 @@ class PoseVisualizer:
         for i, comp_vis in enumerate(comparison_vis):
             # Skip first position if overlay is there
             grid_pos = i + 1 if overlay_img is not None else i
-            row = grid_pos // max_images_per_row
-            col = grid_pos % max_images_per_row
+            row = grid_pos // actual_max_cols
+            col = grid_pos % actual_max_cols
 
             y_start = img_height + row * img_height
             y_end = y_start + img_height
@@ -358,13 +368,13 @@ class PoseVisualizer:
 
             grid_img[y_start:y_end, x_start:x_end] = comp_vis
 
-        # Add title and labels
+        # Add title and labels (adjusted for HD resolution)
         title = "Pose Comparison Results"
         cv2.putText(
-            grid_img, title, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 3
+            grid_img, title, (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 3.0, (255, 255, 255), 6
         )
         cv2.putText(
-            grid_img, title, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 0), 5
+            grid_img, title, (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 3.0, (0, 0, 0), 10
         )
 
         # Add target label
@@ -372,42 +382,42 @@ class PoseVisualizer:
         cv2.putText(
             grid_img,
             target_label,
-            (10, 70),
+            (40, 160),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
+            1.5,
             (255, 255, 255),
-            2,
+            4,
         )
         cv2.putText(
             grid_img,
             target_label,
-            (10, 70),
+            (40, 160),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
+            1.5,
             (0, 0, 0),
-            4,
+            8,
         )
 
-        # Add overlay label if overlay image exists
+        # Add overlay label if overlay image exists (adjusted for HD resolution)
         if overlay_img is not None:
             overlay_label = f"Overlay: Target + Best Match Skeleton (Score: {comparison_results[0].similarity_score:.3f})"
             cv2.putText(
                 grid_img,
                 overlay_label,
-                (10, 100),
+                (40, 240),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
+                1.5,
                 (255, 255, 255),
-                2,
+                4,
             )
             cv2.putText(
                 grid_img,
                 overlay_label,
-                (10, 100),
+                (40, 240),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
+                1.5,
                 (0, 0, 0),
-                4,
+                8,
             )
 
         # Save if output path provided
@@ -438,10 +448,10 @@ class PoseVisualizer:
         Returns:
             Overlay visualization image
         """
-        # Start with target image
-        overlay_img = target_image.copy()
+        # Start with target image and resize to HD
+        overlay_img = self._resize_to_hd_with_padding(target_image.copy())
 
-        # Draw target pose in blue
+        # Draw target pose in blue on HD image
         target_vis = self.draw_pose_on_image(
             overlay_img,
             target_pose,
@@ -449,8 +459,8 @@ class PoseVisualizer:
             show_skeleton=True,
             show_bbox=False,
             show_confidence=False,
-            keypoint_size=6,
-            line_thickness=3,
+            keypoint_size=8,
+            line_thickness=4,
         )
 
         # Draw winning pose skeleton aligned to target pose (overlay on target image)
@@ -501,47 +511,47 @@ class PoseVisualizer:
                         )
                         cv2.circle(target_vis, center, 6, (0, 0, 0), 2)  # Black border
 
-        # Add legend and similarity score
-        legend_y = 30
+        # Add legend and similarity score (adjusted for HD resolution)
+        legend_y = 80
         cv2.putText(
             target_vis,
             f"Similarity: {similarity_score:.3f}",
-            (10, legend_y),
+            (40, legend_y),
             cv2.FONT_HERSHEY_SIMPLEX,
-            1.0,
+            2.0,
             (255, 255, 255),
-            3,
+            6,
         )
         cv2.putText(
             target_vis,
             f"Similarity: {similarity_score:.3f}",
-            (10, legend_y),
+            (40, legend_y),
             cv2.FONT_HERSHEY_SIMPLEX,
-            1.0,
+            2.0,
             (0, 0, 0),
-            1,
+            3,
         )
 
         # Add legend
-        legend_y += 40
+        legend_y += 120
         cv2.putText(
             target_vis,
             "Blue: Target pose",
-            (10, legend_y),
+            (40, legend_y),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
+            1.5,
             (255, 0, 0),
-            2,
+            4,
         )  # Blue text
-        legend_y += 30
+        legend_y += 80
         cv2.putText(
             target_vis,
             "Orange: Best match",
-            (10, legend_y),
+            (40, legend_y),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
+            1.5,
             (0, 165, 255),
-            2,
+            4,
         )  # Orange text
 
         # Save if output path provided
@@ -629,6 +639,99 @@ class PoseVisualizer:
                 distances.append(dist)
 
         return max(distances) if distances else 0.0
+
+    def _resize_to_hd_with_padding(self, image: np.ndarray) -> np.ndarray:
+        """
+        Resize image to HD resolution (1920x1080) with black padding to maintain aspect ratio.
+
+        Args:
+            image: Input image array
+
+        Returns:
+            HD image with black padding
+        """
+        target_width, target_height = 1920, 1080
+
+        # Get original dimensions
+        h, w = image.shape[:2]
+
+        # Calculate scaling factor to fit image within HD bounds
+        scale_w = target_width / w
+        scale_h = target_height / h
+        scale = min(scale_w, scale_h)
+
+        # Calculate new dimensions
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+
+        # Resize image
+        resized = cv2.resize(image, (new_w, new_h))
+
+        # Create HD canvas with black background
+        hd_canvas = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+
+        # Calculate position to center the resized image
+        x_offset = (target_width - new_w) // 2
+        y_offset = (target_height - new_h) // 2
+
+        # Place resized image on canvas
+        hd_canvas[y_offset : y_offset + new_h, x_offset : x_offset + new_w] = resized
+
+        return hd_canvas
+
+    def _scale_pose_to_hd(
+        self, pose: PoseData, original_shape: tuple, target_shape: tuple
+    ) -> PoseData:
+        """
+        Scale pose keypoints from original image dimensions to HD dimensions.
+
+        Args:
+            pose: Original pose data
+            original_shape: (height, width) of original image
+            target_shape: (width, height) of target HD image
+
+        Returns:
+            Scaled pose data
+        """
+        if not pose.keypoints:
+            return pose
+
+        orig_h, orig_w = original_shape[:2]
+        target_w, target_h = target_shape
+
+        # Calculate scaling factors
+        scale_w = target_w / orig_w
+        scale_h = target_h / orig_h
+        scale = min(scale_w, scale_h)
+
+        # Calculate padding offsets
+        new_w = int(orig_w * scale)
+        new_h = int(orig_h * scale)
+        x_offset = (target_w - new_w) // 2
+        y_offset = (target_h - new_h) // 2
+
+        # Scale and offset keypoints
+        scaled_keypoints = []
+        for kp in pose.keypoints:
+            if kp is not None:
+                x, y, conf = kp
+                # Scale coordinates
+                new_x = x * scale + x_offset
+                new_y = y * scale + y_offset
+                scaled_keypoints.append((new_x, new_y, conf))
+            else:
+                scaled_keypoints.append(None)
+
+        # Create new pose data with scaled keypoints
+        scaled_pose = PoseData(
+            keypoints=scaled_keypoints,
+            bounding_box=pose.bounding_box,  # Bounding box not used in visualization
+            confidence_score=pose.confidence_score,
+            image_path=pose.image_path,
+            pose_id=pose.pose_id,
+        )
+
+        return scaled_pose
 
     def create_keypoint_analysis(
         self,

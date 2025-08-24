@@ -128,6 +128,9 @@ class SimilarityResult:
     similarity_score: float
     keypoint_distances: List[float]
     rank: int
+    comparison_pose: Optional["PoseData"] = (
+        None  # The actual pose that gave this similarity score
+    )
 
     def __post_init__(self):
         """Validate similarity result data."""

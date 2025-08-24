@@ -13,6 +13,7 @@ poser/
 ├── pose_estimator.py        # YOLO pose estimation wrapper
 ├── pose_matcher.py          # Pose similarity calculation and matching
 ├── pose_visualizer.py       # Diagnostic visualization generation
+├── pose_cache.py            # Pose caching system for performance
 ├── test_random_poses.py     # Testing script for development
 ├── utils/                   # Utility modules
 │   ├── __init__.py
@@ -47,6 +48,13 @@ poser/
 - Pose skeleton drawing and keypoint display
 - Pose alignment and overlay functionality
 - Grid-based comparison visualization
+- HD resolution output with consistent sizing
+
+### 4. Pose Cache (`pose_cache.py`)
+- JSON-based pose data caching system
+- Image content hashing for unique identification
+- Dramatic performance improvement for subsequent runs
+- Automatic cache management and cleanup
 
 ### 4. Image Utils (`utils/image_utils.py`)
 - Image loading and preprocessing
@@ -98,6 +106,15 @@ class SimilarityResult:
 - [x] Command-line interface
 - [x] Batch processing
 - [x] Results visualization
+
+### Milestone 4: Performance and Quality Improvements ✅
+- [x] Pose caching system for faster subsequent runs
+- [x] Advanced pose quality filtering with critical keypoint penalties
+- [x] Relative visibility threshold for meaningful pose comparisons
+- [x] **Major body region completeness filtering** - requires poses to have keypoints from all major body regions (head, torso, arms, legs)
+- [x] Aggressive filtering of incomplete poses (e.g., "shoulders only", "no legs", "no head")
+- [x] HD resolution visualization with consistent sizing
+- [x] Comprehensive diagnostic output
 - [x] Diagnostic image generation
 
 ### Milestone 4: Optimization ✅
@@ -125,8 +142,10 @@ class SimilarityResult:
 ### Technical Capabilities
 - **Pose Detection**: YOLO v13 with configurable confidence thresholds
 - **Similarity Calculation**: Normalized pose comparison with MSE-based scoring
-- **Visualization**: Comprehensive diagnostic suite with pose overlays
-- **CLI Interface**: Full-featured command-line application
+- **Quality Filtering**: Advanced pose filtering with critical keypoint penalties
+- **Performance**: Pose caching system for dramatic speed improvements
+- **Visualization**: Comprehensive diagnostic suite with pose overlays and HD resolution
+- **CLI Interface**: Full-featured command-line application with caching controls
 - **Testing**: Automated testing with sample images
 
 ## Dependencies
@@ -141,13 +160,19 @@ class SimilarityResult:
 ## Usage Examples
 ```bash
 # Basic pose matching
-python3 main.py --target data/test_images/basketball1.jpg --comparison-dir data/test_images
+python3 main.py --target data/target_images/basketball1.jpg --comparison-dir data/comparison_images
 
 # With visualization
-python3 main.py --target data/test_images/basketball1.jpg --comparison-dir data/test_images --visualize
+python3 main.py --target data/target_images/basketball1.jpg --comparison-dir data/comparison_images --visualize
 
-# Custom threshold and output
-python3 main.py --target data/test_images/basketball1.jpg --comparison-dir data/test_images --threshold 0.8 --output results.json
+# With quality filtering and caching
+python3 main.py --target data/target_images/basketball1.jpg --comparison-dir data/comparison_images --relative-visibility-threshold 0.6 --visualize
+
+# Clear cache and run fresh
+python3 main.py --target data/target_images/basketball1.jpg --comparison-dir data/comparison_images --clear-cache --visualize
+
+# Disable caching for always fresh results
+python3 main.py --target data/target_images/basketball1.jpg --comparison-dir data/comparison_images --no-cache --visualize
 
 # Testing with sample images
 python3 test_random_poses.py
@@ -160,6 +185,9 @@ python3 test_random_poses.py
 - Confidence-weighted scoring for robust matching
 - Multi-person detection with automatic best pose selection
 - Advanced visualization with pose overlays and skeleton drawing
+- **Quality Filtering**: Major body region completeness filtering ensures poses have keypoints from all major body regions (head, torso, arms, legs)
+- **Performance**: JSON-based caching system with image content hashing for unique identification
+- **HD Visualization**: All images standardized to 1920x1080 with black padding for consistent sizing
 
 ## Next Steps
 The core system is complete and functional. Future enhancements could include:
