@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-YOLO v13 Pose Estimation - Main Entry Point
+YOLOv11 Pose Estimation - Main Entry Point
 Finds the closest pose match between a target image and comparison images.
 """
 
@@ -22,7 +22,7 @@ from utils.pose_utils import PoseData, SimilarityResult
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Find closest pose match using YOLO v13 pose estimation"
+        description="Find closest pose match using YOLOv11 pose estimation"
     )
     parser.add_argument(
         "--target",
@@ -140,7 +140,7 @@ def main():
     try:
         # Initialize pose estimator
         if args.verbose:
-            print("Initializing YOLO v13 pose estimator...")
+            print("Initializing YOLOv11 pose estimator...")
 
         use_cache = not args.no_cache
         if args.clear_cache:
@@ -150,9 +150,15 @@ def main():
             cache.clear_cache()
             print("Pose cache cleared.")
 
+        start_time = time.time()
         estimator = PoseEstimator(
-            confidence_threshold=args.threshold, use_cache=use_cache
+            confidence_threshold=args.threshold,
+            model_size="m",  # Upgraded to medium for even better accuracy
+            use_cache=use_cache,
         )
+        init_time = time.time() - start_time
+        if args.verbose:
+            print(f"Model initialization took: {init_time:.2f} seconds")
 
         # Load target image and extract pose
         if args.verbose:

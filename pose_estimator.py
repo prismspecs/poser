@@ -1,10 +1,11 @@
 """
-YOLO v13 Pose Estimator
+YOLOv11 Pose Estimator
 Handles model initialization and pose keypoint extraction from images.
 """
 
 import cv2
 import numpy as np
+import os
 from typing import List, Tuple, Optional
 from ultralytics import YOLO
 from pathlib import Path
@@ -19,7 +20,7 @@ except ImportError:
 
 
 class PoseEstimator:
-    """YOLO v13 pose estimation wrapper."""
+    """YOLOv11 pose estimation wrapper."""
 
     # COCO keypoint names for human pose estimation
     KEYPOINT_NAMES = [
@@ -65,47 +66,52 @@ class PoseEstimator:
         self._initialize_model()
 
     def _initialize_model(self):
-        """Initialize the YOLO pose estimation model."""
-        try:
-            # Load YOLO pose model
-            model_name = f"yolo{self.model_size}-pose.pt"
-            self.model = YOLO(model_name)
-            print(f"Loaded YOLO pose model: {model_name}")
-        except Exception as e:
-            print(f"Warning: Could not load {model_name}, trying default pose model...")
-            try:
-                self.model = YOLO("yolov8n-pose.pt")
-                print("Loaded default YOLO pose model: yolov8n-pose.pt")
-            except Exception as e2:
-                raise RuntimeError(f"Failed to load YOLO pose model: {e2}")
+        """Initialize the YOLO pose estimation and segmentation models."""
+        print(
+            "Initializing YOLOv11 models for all tasks (pose estimation + segmentation)..."
+        )
 
-        # Initialize segmentation model for body masking
-        # Try YOLO v13 segmentation models first (nano, small, large, xlarge)
-        self.segmentation_model = None
-        for model_size in ["n", "s", "l", "x"]:
-            try:
-                model_name = f"yolov13{model_size}-seg.pt"
-                self.segmentation_model = YOLO(model_name)
-                print(f"Loaded YOLO v13 segmentation model: {model_name}")
-                break
-            except Exception as e:
-                continue
+        # Initialize pose estimation model (YOLOv11)
+        self.model = self._initialize_pose_model()
 
-        # If no YOLO v13 models found, try the legacy naming
-        if self.segmentation_model is None:
+        # Initialize segmentation model (YOLOv11)
+        self.segmentation_model = self._initialize_segmentation_model()
+
+    def _initialize_pose_model(self) -> YOLO:
+        """Initialize YOLOv11 pose estimation model with automatic downloading."""
+        # Always prioritize the specifically requested model size
+        model_name = f"yolo11{self.model_size}-pose.pt"
+
+        # Check if the requested model exists locally
+        if os.path.exists(model_name):
             try:
-                self.segmentation_model = YOLO("yolon-seg.pt")
-                print("Loaded YOLO v13 segmentation model: yolon-seg.pt")
+                model = YOLO(model_name)
+                print(f"Loaded existing YOLOv11 pose model: {model_name}")
+                return model
             except Exception as e:
-                print(
-                    f"Warning: Could not load YOLO v13 segmentation model, trying v8: {e}"
-                )
-                try:
-                    self.segmentation_model = YOLO("yolov8n-seg.pt")
-                    print("Loaded YOLO v8 segmentation model: yolov8n-seg.pt")
-                except Exception as e2:
-                    print(f"Warning: Could not load segmentation model: {e2}")
-                    self.segmentation_model = None
+                print(f"Failed to load existing {model_name}, will download fresh copy")
+
+        # Download the requested model size
+        print(f"Downloading YOLOv11 pose model: {model_name}")
+        return self._download_yolo_v11_pose_model()
+
+    def _initialize_segmentation_model(self) -> Optional[YOLO]:
+        """Initialize YOLOv11 segmentation model with automatic downloading."""
+        # Always prioritize the specifically requested model size
+        model_name = f"yolo11{self.model_size}-seg.pt"
+
+        # Check if the requested model exists locally
+        if os.path.exists(model_name):
+            try:
+                model = YOLO(model_name)
+                print(f"Loaded existing YOLOv11 segmentation model: {model_name}")
+                return model
+            except Exception as e:
+                print(f"Failed to load existing {model_name}, will download fresh copy")
+
+        # Download the requested model size
+        print(f"Downloading YOLOv11 segmentation model: {model_name}")
+        return self._download_yolo_v11_segmentation_model()
 
     def extract_poses(self, image: np.ndarray, image_path: str) -> List[PoseData]:
         """
@@ -405,3 +411,119 @@ class PoseEstimator:
         except Exception as e:
             print(f"Warning: Failed to create pose-specific mask: {e}")
             return image
+
+    def _download_yolo_v11_pose_model(self, model_size: str = None) -> YOLO:
+        """
+        Download YOLOv11 pose estimation model weights.
+
+        Args:
+            model_size: Model size ('n' for nano, 's' for small, 'm' for medium, 'l' for large, 'x' for xlarge)
+
+        Returns:
+            YOLO model instance
+        """
+        import requests
+        import os
+
+        # YOLOv11 pose model URLs from Ultralytics assets
+        model_urls = {
+            "n": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n-pose.pt",
+            "s": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s-pose.pt",
+            "m": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11m-pose.pt",
+            "l": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11l-pose.pt",
+            "x": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11x-pose.pt",
+        }
+
+        if model_size is None:
+            model_size = self.model_size
+        if model_size not in model_urls:
+            print(f"Invalid model size: {model_size}. Using '{self.model_size}'.")
+            model_size = self.model_size
+
+        model_name = f"yolo11{model_size}-pose.pt"
+        model_url = model_urls[model_size]
+
+        try:
+            print(f"Downloading {model_name} from {model_url}...")
+            print(
+                "This may take a few minutes depending on your internet connection..."
+            )
+
+            # Download the model
+            response = requests.get(model_url, stream=True)
+            response.raise_for_status()
+
+            # Save the model file
+            with open(model_name, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+            print(f"Successfully downloaded {model_name}")
+
+            # Load the downloaded model
+            model = YOLO(model_name)
+            print(f"Loaded downloaded YOLOv11 pose model: {model_name}")
+            return model
+
+        except Exception as e:
+            print(f"Failed to download {model_name}: {e}")
+            raise RuntimeError(f"Could not download YOLOv11 pose model: {e}")
+
+    def _download_yolo_v11_segmentation_model(
+        self, model_size: str = None
+    ) -> Optional[YOLO]:
+        """
+        Download YOLOv11 segmentation model weights.
+
+        Args:
+            model_size: Model size ('n' for nano, 's' for small, 'm' for medium, 'l' for large, 'x' for xlarge)
+
+        Returns:
+            YOLO model instance if successful, None otherwise
+        """
+        import requests
+        import os
+
+        # YOLOv11 segmentation model URLs from Ultralytics assets
+        model_urls = {
+            "n": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n-seg.pt",
+            "s": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s-seg.pt",
+            "m": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11m-seg.pt",
+            "l": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11l-seg.pt",
+            "x": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11x-seg.pt",
+        }
+
+        if model_size is None:
+            model_size = self.model_size
+        if model_size not in model_urls:
+            print(f"Invalid model size: {model_size}. Using '{self.model_size}'.")
+            model_size = self.model_size
+
+        model_name = f"yolo11{model_size}-seg.pt"
+        model_url = model_urls[model_size]
+
+        try:
+            print(f"Downloading {model_name} from {model_url}...")
+            print(
+                "This may take a few minutes depending on your internet connection..."
+            )
+
+            # Download the model
+            response = requests.get(model_url, stream=True)
+            response.raise_for_status()
+
+            # Save the model file
+            with open(model_name, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+            print(f"Successfully downloaded {model_name}")
+
+            # Load the downloaded model
+            model = YOLO(model_name)
+            print(f"Loaded downloaded YOLOv11 segmentation model: {model_name}")
+            return model
+
+        except Exception as e:
+            print(f"Failed to download {model_name}: {e}")
+            raise RuntimeError(f"Could not download YOLOv11 segmentation model: {e}")
