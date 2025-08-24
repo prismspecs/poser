@@ -6,7 +6,6 @@ Stores pose data in a JSON database with image hash-based keys.
 
 import json
 import hashlib
-import os
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from utils.pose_utils import PoseData

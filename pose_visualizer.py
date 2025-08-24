@@ -9,8 +9,6 @@ import numpy as np
 from pathlib import Path
 from typing import List, Tuple, Optional
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-import matplotlib.patches as mpatches
 
 from utils.pose_utils import PoseData, SimilarityResult
 

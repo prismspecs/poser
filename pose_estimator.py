@@ -422,18 +422,14 @@ class PoseEstimator:
             print(f"Warning: Failed to create pose-specific mask: {e}")
             return image
 
-    def _download_yolo_v11_pose_model(self, model_size: str = None) -> YOLO:
+    def _download_yolo_v11_pose_model(self) -> YOLO:
         """
         Download YOLOv11 pose estimation model weights.
-
-        Args:
-            model_size: Model size ('n' for nano, 's' for small, 'm' for medium, 'l' for large, 'x' for xlarge)
 
         Returns:
             YOLO model instance
         """
         import requests
-        import os
 
         # YOLOv11 pose model URLs from Ultralytics assets
         model_urls = {
@@ -444,11 +440,10 @@ class PoseEstimator:
             "x": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11x-pose.pt",
         }
 
-        if model_size is None:
-            model_size = self.model_size
+        model_size = self.model_size
         if model_size not in model_urls:
-            print(f"Invalid model size: {model_size}. Using '{self.model_size}'.")
-            model_size = self.model_size
+            print(f"Invalid model size: {model_size}. Using 'n'.")
+            model_size = "n"
 
         model_name = f"yolo11{model_size}-pose.pt"
         model_url = model_urls[model_size]
@@ -483,20 +478,14 @@ class PoseEstimator:
             print(f"Failed to download {model_name}: {e}")
             raise RuntimeError(f"Could not download YOLOv11 pose model: {e}")
 
-    def _download_yolo_v11_segmentation_model(
-        self, model_size: str = None
-    ) -> Optional[YOLO]:
+    def _download_yolo_v11_segmentation_model(self) -> Optional[YOLO]:
         """
         Download YOLOv11 segmentation model weights.
-
-        Args:
-            model_size: Model size ('n' for nano, 's' for small, 'm' for medium, 'l' for large, 'x' for xlarge)
 
         Returns:
             YOLO model instance if successful, None otherwise
         """
         import requests
-        import os
 
         # YOLOv11 segmentation model URLs from Ultralytics assets
         model_urls = {
@@ -507,11 +496,10 @@ class PoseEstimator:
             "x": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11x-seg.pt",
         }
 
-        if model_size is None:
-            model_size = self.model_size
+        model_size = self.model_size
         if model_size not in model_urls:
-            print(f"Invalid model size: {model_size}. Using '{self.model_size}'.")
-            model_size = self.model_size
+            print(f"Invalid model size: {model_size}. Using 'n'.")
+            model_size = "n"
 
         model_name = f"yolo11{model_size}-seg.pt"
         model_url = model_urls[model_size]
