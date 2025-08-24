@@ -8,8 +8,9 @@ import argparse
 import json
 import sys
 import random
+import time
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List
 import cv2
 
 from pose_estimator import PoseEstimator
@@ -27,12 +28,10 @@ def parse_arguments():
     parser.add_argument(
         "--target",
         required=True,
-        help="Path to target image OR directory of target images for pose matching",
+        help="Path to target image OR directory of target images",
     )
     parser.add_argument(
-        "--comparison-dir",
-        required=True,
-        help="Directory containing comparison images to search through",
+        "--comparison-dir", required=True, help="Directory containing comparison images"
     )
     parser.add_argument(
         "--random-target",
@@ -53,26 +52,14 @@ def parse_arguments():
         help="Maximum number of results to return (default: 10)",
     )
     parser.add_argument(
-        "--visibility-threshold",
-        type=float,
-        default=0.7,
-        help="Minimum percentage of visible keypoints required for comparison (0.0 to 1.0, default: 0.7)",
-    )
-    parser.add_argument(
         "--relative-visibility-threshold",
         type=float,
         default=0.6,
-        help="Minimum percentage of target's visible keypoints that must be shared in comparison (0.0 to 1.0, default: 0.6)",
+        help="Minimum percentage of target's visible keypoints that must be shared (default: 0.6)",
     )
+    parser.add_argument("--no-cache", action="store_true", help="Disable pose caching")
     parser.add_argument(
-        "--no-cache",
-        action="store_true",
-        help="Disable pose caching (slower but always fresh results)",
-    )
-    parser.add_argument(
-        "--clear-cache",
-        action="store_true",
-        help="Clear the pose cache before running",
+        "--clear-cache", action="store_true", help="Clear the pose cache before running"
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     parser.add_argument(
@@ -83,31 +70,33 @@ def parse_arguments():
     parser.add_argument(
         "--body-mask",
         action="store_true",
-        help="Apply body segmentation masks to comparison images (background becomes magenta)",
+        help="Apply body segmentation masks to comparison images",
+    )
+    parser.add_argument(
+        "--model-size",
+        choices=["n", "s", "m", "l", "x"],
+        default="m",
+        help="YOLOv11 model size: n=nano, s=small, m=medium, l=large, x=xlarge (default: m)",
     )
     parser.add_argument(
         "--output-dir",
         default="results",
         help="Directory to save visualization outputs",
     )
-
     return parser.parse_args()
 
 
-def main():
-    """Main application entry point."""
-    args = parse_arguments()
-
-    # Handle target (can be single image or directory)
+def get_target_image_path(args) -> str:
+    """Get target image path from arguments."""
     target_path = Path(args.target)
+
     if target_path.is_file():
-        # Single target image
         if not validate_image_path(args.target):
             print(f"Error: Invalid target image path: {args.target}")
             sys.exit(1)
-        target_image_path = args.target
+        return args.target
+
     elif target_path.is_dir():
-        # Directory of target images
         target_images = (
             list(target_path.glob("*.jpg"))
             + list(target_path.glob("*.jpeg"))
@@ -118,60 +107,305 @@ def main():
             sys.exit(1)
 
         if args.random_target:
-            # Randomly select target image
             target_image_path = str(random.choice(target_images))
             if args.verbose:
                 print(f"Randomly selected target: {Path(target_image_path).name}")
         else:
-            # Use first image
             target_image_path = str(target_images[0])
             if args.verbose:
                 print(f"Using first target image: {Path(target_image_path).name}")
+        return target_image_path
+
     else:
         print(f"Error: Target path does not exist: {args.target}")
         sys.exit(1)
 
-    # Validate comparison directory
-    comparison_dir = Path(args.comparison_dir)
-    if not comparison_dir.exists() or not comparison_dir.is_dir():
-        print(f"Error: Invalid comparison directory: {args.comparison_dir}")
+
+def get_comparison_images(comparison_dir: Path) -> List[Path]:
+    """Get list of comparison image paths."""
+    comparison_images = (
+        list(comparison_dir.glob("*.jpg"))
+        + list(comparison_dir.glob("*.jpeg"))
+        + list(comparison_dir.glob("*.png"))
+    )
+    if not comparison_images:
+        print(f"Error: No image files found in comparison directory: {comparison_dir}")
         sys.exit(1)
+    return comparison_images
+
+
+def process_comparison_images(
+    estimator,
+    matcher,
+    target_pose,
+    comparison_images,
+    relative_visibility_threshold,
+    verbose,
+):
+    """Process comparison images and find best matches."""
+    results = []
+    comparison_start_time = time.time()
+    total_pose_extraction_time = 0.0
+    total_pose_matching_time = 0.0
+
+    for img_path in comparison_images:
+        if verbose:
+            print(f"Processing: {img_path.name}")
+
+        try:
+            comparison_image = load_image(str(img_path))
+            start_time = time.time()
+            comparison_poses = estimator.extract_poses(comparison_image, str(img_path))
+            pose_time = time.time() - start_time
+            total_pose_extraction_time += pose_time
+
+            if comparison_poses:
+                if verbose and len(comparison_poses) > 1:
+                    print(
+                        f"   Found {len(comparison_poses)} people, comparing with all"
+                    )
+
+                start_time = time.time()
+                best_match = matcher.find_best_match(
+                    target_pose, comparison_poses, relative_visibility_threshold
+                )
+                match_time = time.time() - start_time
+                total_pose_matching_time += match_time
+
+                if best_match:
+                    results.append(best_match)
+
+        except Exception as e:
+            if verbose:
+                print(f"Warning: Failed to process {img_path.name}: {e}")
+            continue
+
+    total_time = time.time() - comparison_start_time
+    return results, total_time, total_pose_extraction_time, total_pose_matching_time
+
+
+def print_timing_summary(
+    init_time,
+    target_time,
+    total_time,
+    pose_extraction_time,
+    pose_matching_time,
+    num_images,
+):
+    """Print timing summary."""
+    print(f"\n=== TIMING SUMMARY ===")
+    print(f"Model initialization: {init_time:.2f} seconds")
+    print(f"Target pose extraction: {target_time:.2f} seconds")
+    print(f"Comparison pose extraction: {pose_extraction_time:.2f} seconds")
+    print(f"Pose matching: {pose_matching_time:.2f} seconds")
+    print(f"Total comparison processing: {total_time:.2f} seconds")
+    print(
+        f"Total runtime (without viz): {init_time + target_time + total_time:.2f} seconds"
+    )
+    print(f"Average time per comparison image: {total_time/num_images:.3f} seconds")
+    print(f"=" * 30)
+
+
+def print_results(results, max_results):
+    """Print results summary."""
+    print(
+        f"\nFound {len(results)} pose matches, showing top {min(len(results), max_results)}:"
+    )
+    print("-" * 80)
+
+    for i, result in enumerate(results[:max_results], 1):
+        print(f"{i:2d}. {Path(result.comparison_image).name}")
+        print(f"    Similarity Score: {result.similarity_score:.3f}")
+        print(f"    Rank: {result.rank}")
+        print()
+
+
+def generate_visualizations(
+    estimator,
+    target_image,
+    target_pose,
+    results,
+    comparison_images,
+    output_dir,
+    body_mask,
+    verbose,
+):
+    """Generate diagnostic visualizations."""
+    if verbose:
+        print("Generating diagnostic visualizations...")
+        viz_start_time = time.time()
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True)
+
+    visualizer = PoseVisualizer()
+
+    # Prepare comparison images and poses for visualization
+    comparison_image_arrays = []
+    comparison_poses_data = []
+    
+    for img_path in comparison_images:
+        try:
+            img_array = load_image(str(img_path))
+            comparison_image_arrays.append((str(img_path), img_array))
+            
+            # Extract poses for skeleton drawing
+            comp_poses = estimator.extract_poses(img_array, str(img_path))
+            if comp_poses:
+                # Use the highest confidence pose for visualization
+                best_pose = max(comp_poses, key=lambda p: p.confidence_score)
+                comparison_poses_data.append(best_pose)
+            else:
+                comparison_poses_data.append(None)
+        except Exception as e:
+            comparison_image_arrays.append((str(img_path), None))
+            comparison_poses_data.append(None)
+    
+    # Create main comparison visualization
+    vis_output_path = (
+        output_dir / f"pose_comparison_{Path(target_pose.image_path).stem}.jpg"
+    )
+    visualizer.create_comparison_visualization(
+        target_image,
+        target_pose,
+        results,
+        comparison_image_arrays,
+        comparison_poses_data,
+        str(vis_output_path),
+        apply_body_mask=body_mask,
+        pose_estimator=estimator,
+    )
+
+    # Create detailed analysis for top result
+    if results:
+        top_result = results[0]
+        top_pose = None
+
+        # Find the corresponding pose data
+        for img_path in comparison_images:
+            if str(img_path) == top_result.comparison_image:
+                try:
+                    comp_img = load_image(str(img_path))
+                    comp_poses = estimator.extract_poses(comp_img, str(img_path))
+                    if comp_poses:
+                        # Find pose with matching similarity score
+                        for pose in comp_poses:
+                            score = visualizer.calculate_similarity(
+                                target_pose, pose, 0.7, 0.6
+                            )
+                            if abs(score - top_result.similarity_score) < 0.001:
+                                top_pose = pose
+                                break
+                        if not top_pose and comp_poses:
+                            top_pose = max(comp_poses, key=lambda p: p.confidence_score)
+                        break
+                except Exception as e:
+                    if verbose:
+                        print(f"Warning: Failed to extract pose for visualization: {e}")
+                    continue
+
+        if top_pose:
+            # Create keypoint analysis
+            analysis_output_path = (
+                output_dir
+                / f"keypoint_analysis_{Path(target_pose.image_path).stem}.jpg"
+            )
+            analysis_vis = visualizer.create_keypoint_analysis(
+                target_pose, top_pose, top_result
+            )
+            cv2.imwrite(str(analysis_output_path), analysis_vis)
+            print(f"Keypoint analysis saved to: {analysis_output_path}")
+
+            # Create winning pose overlay
+            overlay_output_path = (
+                output_dir / f"pose_overlay_{Path(target_pose.image_path).stem}.jpg"
+            )
+            overlay_vis = visualizer.create_winning_pose_overlay(
+                target_image,
+                target_pose,
+                top_pose,
+                top_result.similarity_score,
+                str(overlay_output_path),
+            )
+
+    if verbose:
+        viz_time = time.time() - viz_start_time
+        print(f"Visualization generation took: {viz_time:.2f} seconds")
+    print(f"Visualizations saved to: {output_dir}")
+
+
+def save_results(results, output_path, target_pose):
+    """Save results to JSON file."""
+    output_data = {
+        "target_image": target_pose.image_path,
+        "target_pose_confidence": target_pose.confidence_score,
+        "results": [
+            {
+                "comparison_image": result.comparison_image,
+                "similarity_score": result.similarity_score,
+                "rank": result.rank,
+                "keypoint_distances": result.keypoint_distances,
+            }
+            for result in results
+        ],
+    }
+
+    with open(output_path, "w") as f:
+        json.dump(output_data, f, indent=2)
+
+
+def main():
+    """Main application entry point."""
+    args = parse_arguments()
 
     try:
+        # Get target and comparison paths
+        target_image_path = get_target_image_path(args)
+        comparison_dir = Path(args.comparison_dir)
+        if not comparison_dir.exists() or not comparison_dir.is_dir():
+            print(f"Error: Invalid comparison directory: {args.comparison_dir}")
+            sys.exit(1)
+
+        comparison_images = get_comparison_images(comparison_dir)
+
         # Initialize pose estimator
         if args.verbose:
             print("Initializing YOLOv11 pose estimator...")
 
-        use_cache = not args.no_cache
         if args.clear_cache:
             from pose_cache import PoseCache
 
-            cache = PoseCache()
-            cache.clear_cache()
+            PoseCache().clear_cache()
             print("Pose cache cleared.")
 
         start_time = time.time()
         estimator = PoseEstimator(
             confidence_threshold=args.threshold,
-            model_size="m",  # Upgraded to medium for even better accuracy
-            use_cache=use_cache,
+            model_size=args.model_size,
+            use_cache=not args.no_cache,
         )
         init_time = time.time() - start_time
+
         if args.verbose:
             print(f"Model initialization took: {init_time:.2f} seconds")
 
-        # Load target image and extract pose
+        # Process target image
         if args.verbose:
             print(f"Processing target image: {target_image_path}")
 
         target_image = load_image(target_image_path)
+        start_time = time.time()
         target_poses = estimator.extract_poses(target_image, target_image_path)
+        target_time = time.time() - start_time
+
+        if args.verbose:
+            print(f"Target pose extraction took: {target_time:.2f} seconds")
 
         if not target_poses:
             print("Error: No poses detected in target image")
             sys.exit(1)
 
-        # Use the highest confidence pose as target
+        # Use highest confidence pose as target
         target_pose = max(target_poses, key=lambda p: p.confidence_score)
         if args.verbose:
             if len(target_poses) > 1:
@@ -190,234 +424,47 @@ def main():
         if args.verbose:
             print(f"Processing comparison images from: {args.comparison_dir}")
 
-        comparison_images = (
-            list(comparison_dir.glob("*.jpg"))
-            + list(comparison_dir.glob("*.jpeg"))
-            + list(comparison_dir.glob("*.png"))
-        )
-
-        if not comparison_images:
-            print("Error: No image files found in comparison directory")
-            sys.exit(1)
-
-        # Initialize pose matcher
         matcher = PoseMatcher()
-
-        # Initialize variables for visualization
-        comparison_image_arrays = []
-        comparison_poses_data = []
-
-        # Process each comparison image
-        results = []
-        for img_path in comparison_images:
-            if args.verbose:
-                print(f"Processing: {img_path.name}")
-
-            try:
-                comparison_image = load_image(str(img_path))
-                comparison_poses = estimator.extract_poses(
-                    comparison_image, str(img_path)
-                )
-
-                if comparison_poses:
-                    if args.verbose and len(comparison_poses) > 1:
-                        print(
-                            f"   Found {len(comparison_poses)} people, comparing with all"
-                        )
-
-                    # Find best match among all people in this image
-                    best_match = matcher.find_best_match(
-                        target_pose,
-                        comparison_poses,
-                        args.relative_visibility_threshold,
-                    )
-                    if best_match:
-                        results.append(best_match)
-
-            except Exception as e:
-                if args.verbose:
-                    print(f"Warning: Failed to process {img_path.name}: {e}")
-                continue
-
-        # Sort results by similarity score (descending)
-        results.sort(key=lambda x: x.similarity_score, reverse=True)
-
-        # Store all results for visualization, but limit display
-        all_results = results.copy()
-        display_results = results[: args.max_results]
-
-        # Update comparison_poses_data with the best matching poses for visualization
-        if args.visualize:
-            for result in results:
-                # Find the corresponding image in comparison_image_arrays
-                for i, (img_path, _) in enumerate(comparison_image_arrays):
-                    if str(img_path) == result.comparison_image:
-                        # Extract the best matching pose from this image
-                        try:
-                            comp_img = load_image(str(img_path))
-                            comp_poses = estimator.extract_poses(
-                                comp_img, str(img_path)
-                            )
-                            if comp_poses:
-                                # Find the pose that gave this similarity score
-                                best_pose = None
-                                best_score = -1
-                                for pose in comp_poses:
-                                    score = matcher.calculate_similarity(
-                                        target_pose,
-                                        pose,
-                                        args.visibility_threshold,
-                                        args.relative_visibility_threshold,
-                                    )
-                                    if (
-                                        abs(score - result.similarity_score) < 0.001
-                                    ):  # Small tolerance for floating point
-                                        best_pose = pose
-                                        break
-
-                                if best_pose and i < len(comparison_poses_data):
-                                    comparison_poses_data[i] = best_pose
-                                    print(
-                                        f"Updated comparison_poses_data[{i}] with best pose from {img_path.name} (score: {result.similarity_score:.3f})"
-                                    )
-                                else:
-                                    print(
-                                        f"Warning: Could not find matching pose for {img_path.name} with score {result.similarity_score:.3f}"
-                                    )
-                                    # Fallback: use the highest confidence pose
-                                    if comp_poses:
-                                        fallback_pose = max(
-                                            comp_poses, key=lambda p: p.confidence_score
-                                        )
-                                        comparison_poses_data[i] = fallback_pose
-                                        print(
-                                            f"Using fallback pose (highest confidence) for {img_path.name}"
-                                        )
-                        except Exception as e:
-                            if args.verbose:
-                                print(
-                                    f"Warning: Failed to update pose data for {img_path.name}: {e}"
-                                )
-                            continue
-                        break
-
-        # Display results (limited by max_results)
-        print(
-            f"\nFound {len(all_results)} pose matches, showing top {len(display_results)}:"
+        results, total_time, pose_extraction_time, pose_matching_time = (
+            process_comparison_images(
+                estimator,
+                matcher,
+                target_pose,
+                comparison_images,
+                args.relative_visibility_threshold,
+                args.verbose,
+            )
         )
-        print("-" * 80)
 
-        for i, result in enumerate(display_results, 1):
-            print(f"{i:2d}. {Path(result.comparison_image).name}")
-            print(f"    Similarity Score: {result.similarity_score:.3f}")
-            print(f"    Rank: {result.rank}")
-            print()
+        # Sort and display results
+        results.sort(key=lambda x: x.similarity_score, reverse=True)
+        print_results(results, args.max_results)
 
-        # Generate visualization if requested
+        # Print timing summary
+        if args.verbose:
+            print_timing_summary(
+                init_time,
+                target_time,
+                total_time,
+                pose_extraction_time,
+                pose_matching_time,
+                len(comparison_images),
+            )
+
+        # Generate visualizations
         if args.visualize:
-            try:
-                if args.verbose:
-                    print("Generating diagnostic visualizations...")
+            generate_visualizations(
+                estimator,
+                target_image,
+                target_pose,
+                results,
+                comparison_images,
+                args.output_dir,
+                args.body_mask,
+                args.verbose,
+            )
 
-                # Create output directory
-                output_dir = Path(args.output_dir)
-                output_dir.mkdir(exist_ok=True)
-
-                # Initialize visualizer
-                visualizer = PoseVisualizer()
-
-                # Load comparison images and extract poses for visualization
-                for img_path in comparison_images:
-                    try:
-                        img_array = load_image(str(img_path))
-                        comparison_image_arrays.append((str(img_path), img_array))
-
-                        # Extract poses for skeleton drawing
-                        comp_poses = estimator.extract_poses(img_array, str(img_path))
-                        if comp_poses:
-                            # For now, use the highest confidence pose for visualization
-                            # We'll update this with the best matching pose after similarity calculation
-                            best_pose = max(
-                                comp_poses, key=lambda p: p.confidence_score
-                            )
-                            comparison_poses_data.append(best_pose)
-                        else:
-                            comparison_poses_data.append(None)
-                    except:
-                        comparison_image_arrays.append((str(img_path), None))
-                        comparison_poses_data.append(None)
-
-                # Create main comparison visualization
-                vis_output_path = (
-                    output_dir
-                    / f"pose_comparison_{Path(target_pose.image_path).stem}.jpg"
-                )
-                main_vis = visualizer.create_comparison_visualization(
-                    target_image,
-                    target_pose,
-                    results,  # Use only filtered results for visualization
-                    comparison_image_arrays,
-                    comparison_poses_data,
-                    str(vis_output_path),
-                    apply_body_mask=args.body_mask,
-                    pose_estimator=estimator,
-                )
-
-                # Create detailed keypoint analysis and overlay for top result
-                if results:
-                    top_result = results[0]
-                    # Find the corresponding pose data for detailed analysis
-                    top_pose = None
-
-                    # Find the best matching pose from the comparison_poses_data
-                    for i, (img_path, _) in enumerate(comparison_image_arrays):
-                        if str(img_path) == top_result.comparison_image:
-                            if (
-                                i < len(comparison_poses_data)
-                                and comparison_poses_data[i] is not None
-                            ):
-                                top_pose = comparison_poses_data[i]
-                                break
-
-                    if top_pose:
-                        # Create keypoint analysis
-                        analysis_output_path = (
-                            output_dir
-                            / f"keypoint_analysis_{Path(target_pose.image_path).stem}.jpg"
-                        )
-                        analysis_vis = visualizer.create_keypoint_analysis(
-                            target_pose, top_pose, top_result
-                        )
-                        cv2.imwrite(str(analysis_output_path), analysis_vis)
-                        print(f"Keypoint analysis saved to: {analysis_output_path}")
-
-                        # Create winning pose overlay
-                        overlay_output_path = (
-                            output_dir
-                            / f"pose_overlay_{Path(target_pose.image_path).stem}.jpg"
-                        )
-                        overlay_vis = visualizer.create_winning_pose_overlay(
-                            target_image,
-                            target_pose,
-                            top_pose,
-                            top_result.similarity_score,
-                            str(overlay_output_path),
-                        )
-                    else:
-                        print("Warning: Could not find top pose for visualization")
-
-                print(f"Visualizations saved to: {output_dir}")
-
-            except Exception as e:
-                if args.verbose:
-                    print(f"Warning: Visualization failed: {e}")
-                    import traceback
-
-                    traceback.print_exc()
-                else:
-                    print(f"Warning: Visualization failed: {e}")
-
-        # Save results if output file specified
+        # Save results
         if args.output:
             save_results(results, args.output, target_pose)
             print(f"Results saved to: {args.output}")
@@ -429,28 +476,6 @@ def main():
 
             traceback.print_exc()
         sys.exit(1)
-
-
-def save_results(
-    results: List[SimilarityResult], output_path: str, target_pose: PoseData
-):
-    """Save results to JSON file."""
-    output_data = {
-        "target_image": target_pose.image_path,
-        "target_pose_confidence": target_pose.confidence_score,
-        "results": [
-            {
-                "comparison_image": result.comparison_image,
-                "similarity_score": result.similarity_score,
-                "rank": result.rank,
-                "keypoint_distances": result.keypoint_distances,
-            }
-            for result in results
-        ],
-    }
-
-    with open(output_path, "w") as f:
-        json.dump(output_data, f, indent=2)
 
 
 if __name__ == "__main__":
