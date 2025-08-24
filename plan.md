@@ -75,6 +75,9 @@ class SimilarityResult:
 - Requires keypoints from all major regions (head, torso, arms, legs)
 - Relative visibility threshold (default: 0.65)
 - Critical keypoint penalties for incomplete poses
+- Increased confidence thresholds for more selective human detection:
+  - Main pose detection: 0.7 (was 0.5)
+  - Keypoint visibility: 0.5 (was 0.3)
 
 ### Visualization Controls
 - Configurable skeleton drawing on comparison images
@@ -91,9 +94,8 @@ class SimilarityResult:
 - `--visualize`: Generate diagnostic visualizations
 
 ### Visualization Controls
-- `--body-mask`: Apply body segmentation masks
-- `--no-skeleton`: Disable skeleton drawing on comparison images
-- `--no-mask`: Disable body masking on comparison images
+- `--no-mask`: Disable body segmentation masks on comparison images (masks are on by default)
+- `--no-skeleton`: Disable skeleton drawing (lines + keypoints) on comparison images
 
 ## Dependencies
 - ultralytics (YOLO v11)
@@ -107,9 +109,9 @@ class SimilarityResult:
 # Basic pose matching
 python3 main.py --target data/target_images/image.jpg --comparison-dir data/comparison_images
 
-# With visualization and masking
-python3 main.py --target data/target_images/image.jpg --comparison-dir data/comparison_images --visualize --body-mask
+# With visualization (masking and skeleton on by default)
+python3 main.py --target data/target_images/image.jpg --comparison-dir data/comparison_images --visualize
 
 # Control visualization elements
-python3 main.py --target data/target_images/image.jpg --comparison-dir data/comparison_images --visualize --no-skeleton --body-mask
+python3 main.py --target data/target_images/image.jpg --comparison-dir data/comparison_images --visualize --no-skeleton --no-mask
 ```

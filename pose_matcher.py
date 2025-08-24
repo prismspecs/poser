@@ -113,7 +113,7 @@ class PoseMatcher:
         # Find common keypoints with meaningful confidence
         # A keypoint is only considered "visible" if it has confidence above a threshold
         confidence_threshold = (
-            0.3  # Keypoints below this confidence are essentially invisible
+            0.5  # Keypoints below this confidence are essentially invisible
         )
 
         common_indices = []

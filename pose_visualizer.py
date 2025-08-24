@@ -217,7 +217,7 @@ class PoseVisualizer:
             max_images_per_row: Maximum images per row in the grid
             apply_body_mask: Whether to apply body segmentation masks
             pose_estimator: Pose estimator instance for masking
-            show_skeleton: Whether to draw skeletons on comparison images (target always shows skeleton)
+            show_skeleton: Whether to draw skeleton (lines + keypoints) on comparison images (target always shows skeleton)
 
         Returns:
             Visualization image
@@ -309,7 +309,7 @@ class PoseVisualizer:
                         hd_img = self.draw_pose_on_image(
                             hd_img,
                             scaled_pose,
-                            show_keypoints=True,
+                            show_keypoints=show_skeleton,  # Both controlled by show_skeleton
                             show_skeleton=show_skeleton,
                             show_bbox=False,
                             show_confidence=False,

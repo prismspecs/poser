@@ -45,7 +45,7 @@ class PoseEstimator:
 
     def __init__(
         self,
-        confidence_threshold: float = 0.5,
+        confidence_threshold: float = 0.7,
         model_size: str = "n",
         use_cache: bool = True,
     ):

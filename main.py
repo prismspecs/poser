@@ -41,8 +41,8 @@ def parse_arguments():
     parser.add_argument(
         "--threshold",
         type=float,
-        default=0.5,
-        help="Confidence threshold for pose detection (default: 0.5)",
+        default=0.7,
+        help="Confidence threshold for pose detection (default: 0.7)",
     )
     parser.add_argument("--output", help="Output file for results (JSON format)")
     parser.add_argument(
@@ -68,20 +68,16 @@ def parse_arguments():
         help="Generate diagnostic visualization images",
     )
     parser.add_argument(
-        "--body-mask",
+        "--no-mask",
         action="store_true",
-        help="Apply body segmentation masks to comparison images",
+        help="Disable body segmentation masks on comparison images (masks are on by default)",
     )
     parser.add_argument(
         "--no-skeleton",
         action="store_true",
-        help="Disable skeleton drawing on comparison images (target overlay always shows skeleton)",
+        help="Disable skeleton drawing (lines + keypoints) on comparison images (target overlay always shows skeleton)",
     )
-    parser.add_argument(
-        "--no-mask",
-        action="store_true",
-        help="Disable body masking on comparison images",
-    )
+
     parser.add_argument(
         "--model-size",
         choices=["n", "s", "m", "l", "x"],
@@ -239,7 +235,6 @@ def generate_visualizations(
     results,
     comparison_images,
     output_dir,
-    body_mask,
     verbose,
     show_skeleton=True,
     show_mask=True,
@@ -286,7 +281,7 @@ def generate_visualizations(
         comparison_image_arrays,
         comparison_poses_data,
         str(vis_output_path),
-        apply_body_mask=show_mask and body_mask,
+        apply_body_mask=show_mask,
         pose_estimator=estimator,
         show_skeleton=show_skeleton,
     )
@@ -480,7 +475,6 @@ def main():
                 limited_results,
                 comparison_images,
                 args.output_dir,
-                args.body_mask,
                 args.verbose,
                 show_skeleton=not args.no_skeleton,
                 show_mask=not args.no_mask,

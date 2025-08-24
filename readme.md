@@ -47,10 +47,10 @@ Add the `--visualize` flag to create diagnostic images:
 python3 main.py --target path/to/target.jpg --comparison-dir path/to/comparison/images --visualize
 ```
 
-More robust
+Simple run program and output a test composition
 
 ```bash
-source venv/bin/activate && python3 main.py --target data/target_images/skateboarding1.webp --comparison-dir data/comparison_images --visualize --body-mask --threshold 0.65 --max-results 5
+python3 main.py --target data/target_images/dancing1.jpg --comparison-dir data/comparison_images/ --visualize
 ```
 
 This will create:
@@ -77,7 +77,7 @@ python3 main.py --help
 Available options:
 - `--target`: Path to target image
 - `--comparison-dir`: Directory containing comparison images
-- `--threshold`: Confidence threshold for pose detection (default: 0.5)
+- `--threshold`: Confidence threshold for pose detection (default: 0.7)
 - `--max-results`: Maximum number of results to return (default: 10)
 - `--output`: Save results to JSON file
 - `--visualize`: Generate diagnostic visualizations
