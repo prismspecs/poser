@@ -516,7 +516,7 @@ class PoseEstimator:
                 (int(kp[0]), int(kp[1])) for kp in pose.keypoints if kp is not None
             ]
 
-            if len(valid_keypoints) < 3:
+            if len(valid_keypoints) < 6:
                 # Not enough keypoints for a meaningful mask, just return original
                 print("Warning: Not enough keypoints for fallback mask")
                 return image
@@ -547,6 +547,215 @@ class PoseEstimator:
         except Exception as e:
             print(f"Warning: Failed to create keypoint-based mask: {e}")
             return image
+
+    def create_pose_specific_mask_with_transparency(
+        self,
+        image: np.ndarray,
+        pose: PoseData,
+        background_color: Tuple[int, int, int] = (255, 0, 255),
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Create a body mask with transparency support for layering.
+
+        Returns both a display image (with colored background) and an alpha mask
+        for transparency when saving or layering.
+
+        Args:
+            image: Input image as numpy array
+            pose: Specific pose data to mask around
+            background_color: Color to use for background display (default: magenta)
+
+        Returns:
+            Tuple of (display_image, alpha_mask) where:
+            - display_image: Image with colored background for display
+            - alpha_mask: Binary mask for transparency (0=transparent, 255=opaque)
+        """
+        if self.segmentation_model is None:
+            print("Warning: Segmentation model not available, returning original image")
+            return image, np.ones(image.shape[:2], dtype=np.uint8) * 255
+
+        try:
+            # Get the bounding box of the specific pose
+            x1, y1, x2, y2 = pose.bounding_box
+            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+
+            # Expand the bounding box slightly but adaptively
+            padding = min(20, (x2 - x1) // 10, (y2 - y1) // 10)
+            x1 = max(0, x1 - padding)
+            y1 = max(0, y1 - padding)
+            x2 = min(image.shape[1], x2 + padding)
+            y2 = min(image.shape[0], y2 + padding)
+
+            # Validate bounding box
+            if x2 <= x1 or y2 <= y1:
+                print("Warning: Invalid bounding box for pose-specific masking")
+                return image, np.ones(image.shape[:2], dtype=np.uint8) * 255
+
+            # Crop the image to the pose region
+            pose_region = image[y1:y2, x1:x2]
+
+            # Run segmentation on the pose region
+            results = self.segmentation_model(pose_region, verbose=False)
+
+            if results and len(results) > 0 and results[0].masks is not None:
+                masks = results[0].masks.data.cpu().numpy()
+
+                # Choose best mask if multiple detected
+                if len(masks) > 1:
+                    region_center_x = pose_region.shape[1] // 2
+                    region_center_y = pose_region.shape[0] // 2
+
+                    best_mask_idx = 0
+                    best_coverage = 0
+
+                    for i, mask in enumerate(masks):
+                        mask_binary = (mask * 255).astype(np.uint8) > 127
+                        center_region = mask_binary[
+                            max(0, region_center_y - 20) : region_center_y + 20,
+                            max(0, region_center_x - 20) : region_center_x + 20,
+                        ]
+                        coverage = np.sum(center_region) / center_region.size
+
+                        if coverage > best_coverage:
+                            best_coverage = coverage
+                            best_mask_idx = i
+
+                    mask_data = masks[best_mask_idx]
+                else:
+                    mask_data = masks[0]
+
+                mask_data = (mask_data * 255).astype(np.uint8)
+
+                # Resize mask to match the pose region dimensions if needed
+                if mask_data.shape != pose_region.shape[:2]:
+                    mask_data = cv2.resize(
+                        mask_data, (pose_region.shape[1], pose_region.shape[0])
+                    )
+
+                # Create full-size alpha mask
+                alpha_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+                alpha_mask[y1:y2, x1:x2] = mask_data
+
+                # Validate keypoint coverage
+                valid_keypoints = [kp for kp in pose.keypoints if kp is not None]
+                if valid_keypoints:
+                    keypoint_coverage = 0
+                    for kp in valid_keypoints[:5]:
+                        kp_x, kp_y = int(kp[0]), int(kp[1])
+                        if (
+                            0 <= kp_x < alpha_mask.shape[1]
+                            and 0 <= kp_y < alpha_mask.shape[0]
+                            and alpha_mask[kp_y, kp_x] > 127
+                        ):
+                            keypoint_coverage += 1
+
+                    if keypoint_coverage == 0:
+                        print(
+                            "Warning: Segmentation mask doesn't align with pose keypoints, using fallback"
+                        )
+                        return self._create_keypoint_based_mask_with_transparency(
+                            image, pose, background_color
+                        )
+
+                # Create display image with colored background
+                display_image = image.copy()
+                mask_bool = alpha_mask > 127
+                display_image[~mask_bool] = background_color
+
+                return display_image, alpha_mask
+
+            else:
+                # No segmentation result, fallback to keypoint-based mask
+                print(
+                    "Warning: No segmentation mask found, using keypoint-based fallback"
+                )
+                return self._create_keypoint_based_mask_with_transparency(
+                    image, pose, background_color
+                )
+
+        except Exception as e:
+            print(
+                f"Warning: Failed to create pose-specific mask with transparency: {e}"
+            )
+            return self._create_keypoint_based_mask_with_transparency(
+                image, pose, background_color
+            )
+
+    def _create_keypoint_based_mask_with_transparency(
+        self,
+        image: np.ndarray,
+        pose: PoseData,
+        background_color: Tuple[int, int, int] = (255, 0, 255),
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Create a keypoint-based mask with transparency support.
+
+        Args:
+            image: Input image as numpy array
+            pose: Pose data to create mask from
+            background_color: Color to use for background display (default: magenta)
+
+        Returns:
+            Tuple of (display_image, alpha_mask)
+        """
+        try:
+            # Get valid keypoints
+            valid_keypoints = [
+                (int(kp[0]), int(kp[1])) for kp in pose.keypoints if kp is not None
+            ]
+
+            if len(valid_keypoints) < 6:
+                print("Warning: Not enough keypoints for fallback mask")
+                return image, np.ones(image.shape[:2], dtype=np.uint8) * 255
+
+            # Create alpha mask from convex hull of keypoints
+            alpha_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+
+            # Convert keypoints to the format cv2.convexHull expects
+            points = np.array(valid_keypoints, dtype=np.int32)
+
+            # Create convex hull and fill it
+            hull = cv2.convexHull(points)
+            cv2.fillPoly(alpha_mask, [hull], 255)
+
+            # Dilate the mask slightly to include more of the body
+            kernel = np.ones((15, 15), np.uint8)
+            alpha_mask = cv2.dilate(alpha_mask, kernel, iterations=1)
+
+            # Create display image with colored background
+            display_image = image.copy()
+            mask_bool = alpha_mask > 127
+            display_image[~mask_bool] = background_color
+
+            return display_image, alpha_mask
+
+        except Exception as e:
+            print(
+                f"Warning: Failed to create keypoint-based mask with transparency: {e}"
+            )
+            return image, np.ones(image.shape[:2], dtype=np.uint8) * 255
+
+    def create_rgba_image(
+        self, image: np.ndarray, alpha_mask: np.ndarray
+    ) -> np.ndarray:
+        """
+        Convert RGB image and alpha mask to RGBA image with transparency.
+
+        Args:
+            image: RGB image (H, W, 3)
+            alpha_mask: Alpha mask (H, W) with values 0-255
+
+        Returns:
+            RGBA image (H, W, 4) with transparency
+        """
+        if len(image.shape) == 3 and image.shape[2] == 3:
+            # Create RGBA image
+            rgba_image = np.zeros((image.shape[0], image.shape[1], 4), dtype=np.uint8)
+            rgba_image[:, :, :3] = image  # RGB channels
+            rgba_image[:, :, 3] = alpha_mask  # Alpha channel
+            return rgba_image
+        else:
+            raise ValueError("Input image must be RGB (H, W, 3)")
 
     def _download_yolo_v11_pose_model(self) -> YOLO:
         """

@@ -132,7 +132,7 @@ class PoseMatcher:
                 if conf1 >= confidence_threshold and conf2 >= confidence_threshold:
                     common_indices.append(i)
 
-        if len(common_indices) < 3:  # Need at least 3 points for meaningful comparison
+        if len(common_indices) < 6:  # Need at least 6 points for meaningful comparison
             return 0.0
 
         # CRITICAL: Check relative visibility - poses must share enough keypoints relative to the target
@@ -172,8 +172,8 @@ class PoseMatcher:
             region_keypoints = [i for i in common_indices if i in region_indices]
             region_completeness[region_name] = len(region_keypoints)
 
-        # Require at least 2 keypoints from each major region
-        min_region_keypoints = 2
+        # Require at least 3 keypoints from each major region
+        min_region_keypoints = 3
         for region_name, count in region_completeness.items():
             if count < min_region_keypoints:
                 # print(

@@ -78,6 +78,9 @@ class SimilarityResult:
 - Increased confidence thresholds for more selective human detection:
   - Main pose detection: 0.7 (was 0.5)
   - Keypoint visibility: 0.5 (was 0.3)
+- Stricter shared keypoint requirements:
+  - Minimum shared keypoints: 6 (was 3)
+  - Minimum keypoints per body region: 3 (was 2)
 
 ### Visualization Controls
 - Configurable skeleton drawing on comparison images
@@ -96,6 +99,7 @@ class SimilarityResult:
 ### Visualization Controls
 - `--no-mask`: Disable body segmentation masks on comparison images (masks are on by default)
 - `--no-skeleton`: Disable skeleton drawing (lines + keypoints) on comparison images
+- `--layer-poses`: Create layered visualizations overlaying comparison poses on target image with transparency
 
 ## Dependencies
 - ultralytics (YOLO v11)
@@ -114,4 +118,7 @@ python3 main.py --target data/target_images/image.jpg --comparison-dir data/comp
 
 # Control visualization elements
 python3 main.py --target data/target_images/image.jpg --comparison-dir data/comparison_images --visualize --no-skeleton --no-mask
+
+# Create layered pose overlays with transparency
+python3 main.py --target data/target_images/image.jpg --comparison-dir data/comparison_images --visualize --layer-poses
 ```
