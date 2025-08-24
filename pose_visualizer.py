@@ -259,22 +259,27 @@ class PoseVisualizer:
 
             if comp_img is not None:
                 # Apply body mask if requested
-                if apply_body_mask and pose_estimator and comp_pose:
-                    try:
-                        # Use pose-specific mask to only show the pose that achieved the similarity score
-                        comp_img = pose_estimator.create_pose_specific_mask(
-                            comp_img, comp_pose
-                        )
-                    except Exception as e:
-                        print(
-                            f"Warning: Failed to apply pose-specific mask to {img_name}: {e}"
-                        )
-                elif apply_body_mask and pose_estimator:
-                    try:
-                        # Fallback to general body mask if no specific pose data
-                        comp_img = pose_estimator.create_body_mask(comp_img)
-                    except Exception as e:
-                        print(f"Warning: Failed to apply body mask to {img_name}: {e}")
+                if apply_body_mask and pose_estimator:
+                    if comp_pose:
+                        try:
+                            # ALWAYS use pose-specific mask when pose data is available
+                            # This ensures the mask corresponds to the same person as the skeleton
+                            comp_img = pose_estimator.create_pose_specific_mask(
+                                comp_img, comp_pose
+                            )
+                        except Exception as e:
+                            print(
+                                f"Warning: Failed to apply pose-specific mask to {img_name}: {e}"
+                            )
+                            # Don't fallback to general mask - it might segment a different person
+                    else:
+                        # Only use general body mask as last resort when no pose data available
+                        try:
+                            comp_img = pose_estimator.create_body_mask(comp_img)
+                        except Exception as e:
+                            print(
+                                f"Warning: Failed to apply body mask to {img_name}: {e}"
+                            )
 
                 # First resize to HD resolution with black padding
                 hd_img = self._resize_to_hd_with_padding(comp_img)

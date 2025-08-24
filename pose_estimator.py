@@ -362,6 +362,9 @@ class PoseEstimator:
         """
         Create a body mask specifically for a detected pose, keeping only that pose visible.
 
+        This method crops to the pose's bounding box and runs segmentation only in that region,
+        ensuring the mask corresponds to the same person the pose keypoints were detected on.
+
         Args:
             image: Input image as numpy array
             pose: Specific pose data to mask around
@@ -380,11 +383,17 @@ class PoseEstimator:
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
 
             # Expand the bounding box slightly to ensure we capture the full body
-            padding = 20
+            # But don't expand too much to avoid including other people
+            padding = min(20, (x2 - x1) // 10, (y2 - y1) // 10)  # Adaptive padding
             x1 = max(0, x1 - padding)
             y1 = max(0, y1 - padding)
             x2 = min(image.shape[1], x2 + padding)
             y2 = min(image.shape[0], y2 + padding)
+
+            # Validate bounding box
+            if x2 <= x1 or y2 <= y1:
+                print("Warning: Invalid bounding box for pose-specific masking")
+                return image
 
             # Crop the image to the pose region
             pose_region = image[y1:y2, x1:x2]
@@ -396,11 +405,38 @@ class PoseEstimator:
             output_image = image.copy()
 
             if results and len(results) > 0 and results[0].masks is not None:
-                # Get the mask for the pose region
-                mask_data = results[0].masks.data[0].cpu().numpy()
+                masks = results[0].masks.data.cpu().numpy()
+
+                # If multiple masks detected in the pose region, choose the best one
+                if len(masks) > 1:
+                    # Choose the mask that best covers the center of the pose region
+                    # (where the person should be)
+                    region_center_x = pose_region.shape[1] // 2
+                    region_center_y = pose_region.shape[0] // 2
+
+                    best_mask_idx = 0
+                    best_coverage = 0
+
+                    for i, mask in enumerate(masks):
+                        # Check coverage around the center
+                        mask_binary = (mask * 255).astype(np.uint8) > 127
+                        center_region = mask_binary[
+                            max(0, region_center_y - 20) : region_center_y + 20,
+                            max(0, region_center_x - 20) : region_center_x + 20,
+                        ]
+                        coverage = np.sum(center_region) / center_region.size
+
+                        if coverage > best_coverage:
+                            best_coverage = coverage
+                            best_mask_idx = i
+
+                    mask_data = masks[best_mask_idx]
+                else:
+                    mask_data = masks[0]
+
                 mask_data = (mask_data * 255).astype(np.uint8)
 
-                # Resize mask to match the pose region dimensions
+                # Resize mask to match the pose region dimensions if needed
                 if mask_data.shape != pose_region.shape[:2]:
                     mask_data = cv2.resize(
                         mask_data, (pose_region.shape[1], pose_region.shape[0])
@@ -412,14 +448,104 @@ class PoseEstimator:
                 # Place the pose mask in the correct location
                 full_mask[y1:y2, x1:x2] = mask_data
 
+                # Validate that the mask actually covers some of the pose keypoints
+                # This helps ensure we're masking the right person
+                valid_keypoints = [kp for kp in pose.keypoints if kp is not None]
+                if valid_keypoints:
+                    keypoint_coverage = 0
+                    for kp in valid_keypoints[:5]:  # Check first 5 valid keypoints
+                        kp_x, kp_y = int(kp[0]), int(kp[1])
+                        if (
+                            0 <= kp_x < full_mask.shape[1]
+                            and 0 <= kp_y < full_mask.shape[0]
+                            and full_mask[kp_y, kp_x] > 127
+                        ):
+                            keypoint_coverage += 1
+
+                    # If mask doesn't cover any keypoints, it's probably wrong
+                    if keypoint_coverage == 0:
+                        print(
+                            "Warning: Segmentation mask doesn't align with pose keypoints, using fallback"
+                        )
+                        # Fallback: create a simple mask from keypoints
+                        return self._create_keypoint_based_mask(
+                            image, pose, background_color
+                        )
+
                 # Apply mask: keep original image where mask is white, set background color elsewhere
                 mask_bool = full_mask > 127
                 output_image[~mask_bool] = background_color
+
+            else:
+                # No segmentation result, fallback to keypoint-based mask
+                print(
+                    "Warning: No segmentation mask found, using keypoint-based fallback"
+                )
+                return self._create_keypoint_based_mask(image, pose, background_color)
 
             return output_image
 
         except Exception as e:
             print(f"Warning: Failed to create pose-specific mask: {e}")
+            # Fallback to keypoint-based mask
+            return self._create_keypoint_based_mask(image, pose, background_color)
+
+    def _create_keypoint_based_mask(
+        self,
+        image: np.ndarray,
+        pose: PoseData,
+        background_color: Tuple[int, int, int] = (255, 0, 255),
+    ) -> np.ndarray:
+        """
+        Create a simple mask based on pose keypoints when segmentation fails.
+
+        This creates a convex hull around the visible keypoints as a fallback when
+        the segmentation model doesn't produce a valid mask.
+
+        Args:
+            image: Input image as numpy array
+            pose: Pose data to create mask from
+            background_color: Color to use for background (default: magenta)
+
+        Returns:
+            Image with keypoint-based mask applied
+        """
+        try:
+            # Get valid keypoints
+            valid_keypoints = [
+                (int(kp[0]), int(kp[1])) for kp in pose.keypoints if kp is not None
+            ]
+
+            if len(valid_keypoints) < 3:
+                # Not enough keypoints for a meaningful mask, just return original
+                print("Warning: Not enough keypoints for fallback mask")
+                return image
+
+            # Create mask from convex hull of keypoints
+            import cv2
+
+            mask = np.zeros(image.shape[:2], dtype=np.uint8)
+
+            # Convert keypoints to the format cv2.convexHull expects
+            points = np.array(valid_keypoints, dtype=np.int32)
+
+            # Create convex hull and fill it
+            hull = cv2.convexHull(points)
+            cv2.fillPoly(mask, [hull], 255)
+
+            # Dilate the mask slightly to include more of the body
+            kernel = np.ones((15, 15), np.uint8)
+            mask = cv2.dilate(mask, kernel, iterations=1)
+
+            # Apply mask
+            output_image = image.copy()
+            mask_bool = mask > 127
+            output_image[~mask_bool] = background_color
+
+            return output_image
+
+        except Exception as e:
+            print(f"Warning: Failed to create keypoint-based mask: {e}")
             return image
 
     def _download_yolo_v11_pose_model(self) -> YOLO:
