@@ -81,6 +81,11 @@ def parse_arguments():
         help="Generate diagnostic visualization images",
     )
     parser.add_argument(
+        "--body-mask",
+        action="store_true",
+        help="Apply body segmentation masks to comparison images (background becomes magenta)",
+    )
+    parser.add_argument(
         "--output-dir",
         default="results",
         help="Directory to save visualization outputs",
@@ -348,6 +353,8 @@ def main():
                     comparison_image_arrays,
                     comparison_poses_data,
                     str(vis_output_path),
+                    apply_body_mask=args.body_mask,
+                    pose_estimator=estimator,
                 )
 
                 # Create detailed keypoint analysis and overlay for top result
