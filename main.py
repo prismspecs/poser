@@ -909,6 +909,64 @@ def process_single_target(
     return target_image, target_pose, results, target_time
 
 
+def process_single_target_fast(
+    target_image_path, estimator, matcher, comparison_poses_data, args, frame_number=None
+):
+    """Process a single target image using pre-loaded comparison poses."""
+    if args.verbose:
+        frame_prefix = f"Frame {frame_number:04d}: " if frame_number is not None else ""
+        print(f"{frame_prefix}Processing target image: {Path(target_image_path).name}")
+
+    target_image = load_image(target_image_path)
+    start_time = time.time()
+    target_poses = estimator.extract_poses(target_image, target_image_path)
+    target_time = time.time() - start_time
+
+    if args.verbose:
+        print(f"Target pose extraction took: {target_time:.2f} seconds")
+
+    if not target_poses:
+        if args.verbose:
+            print("Warning: No poses detected in target image")
+        return None, None, None, target_time
+
+    # Use highest confidence pose as target
+    target_pose = max(target_poses, key=lambda p: p.confidence_score)
+    if args.verbose:
+        if len(target_poses) > 1:
+            print(
+                f"Found {len(target_poses)} people in target image, using highest confidence person"
+            )
+
+    # Fast comparison using pre-loaded poses
+    if args.verbose:
+        print(f"🔄 Matching against {len(comparison_poses_data)} pre-loaded comparison poses...")
+    
+    results = []
+    start_time = time.time()
+    
+    for img_path, pose_data in comparison_poses_data.items():
+        comparison_poses = pose_data['poses']
+        
+        if comparison_poses:
+            best_match = matcher.find_best_match(
+                target_pose, comparison_poses, args.relative_visibility_threshold
+            )
+            
+            if best_match:
+                results.append(best_match)
+    
+    match_time = time.time() - start_time
+    
+    if args.verbose:
+        print(f"Pose matching took: {match_time:.2f} seconds")
+
+    # Sort results
+    results.sort(key=lambda x: x.similarity_score, reverse=True)
+
+    return target_image, target_pose, results, target_time
+
+
 
 
 
@@ -1041,6 +1099,46 @@ def process_batch_targets(args):
     if args.verbose:
         print(f"Model initialization took: {init_time:.2f} seconds")
 
+    # Pre-load all comparison poses efficiently using cache
+    if args.verbose:
+        print(f"\n📋 Loading poses from {len(comparison_images)} comparison images...")
+    
+    comparison_poses_data = {}
+    cache_hits = 0
+    cache_misses = 0
+    
+    for i, img_path in enumerate(comparison_images, 1):
+        if args.verbose and i % 100 == 0:
+            print(f"   Loading {i}/{len(comparison_images)} comparison poses...")
+        
+        try:
+            img_array = load_image(str(img_path))
+            # This will use cache if available, or extract and cache if not
+            poses = estimator.extract_poses(img_array, str(img_path))
+            comparison_poses_data[str(img_path)] = {
+                'poses': poses,
+                'image': img_array
+            }
+            
+            # Check if this was a cache hit
+            if estimator.cache and estimator.cache.is_cached(str(img_path)):
+                cache_hits += 1
+            else:
+                cache_misses += 1
+                
+        except Exception as e:
+            if args.verbose:
+                print(f"   Warning: Failed to load poses from {img_path.name}: {e}")
+            comparison_poses_data[str(img_path)] = {
+                'poses': [],
+                'image': None
+            }
+    
+    if args.verbose:
+        total_poses = sum(len(data['poses']) for data in comparison_poses_data.values())
+        print(f"✅ Loaded {total_poses} poses from {len(comparison_images)} images")
+        print(f"📊 Cache stats: {cache_hits} hits, {cache_misses} misses")
+
     matcher = PoseMatcher()
 
     # Create output directory structure
@@ -1059,11 +1157,11 @@ def process_batch_targets(args):
         )
 
         try:
-            target_image, target_pose, results, target_time = process_single_target(
+            target_image, target_pose, results, target_time = process_single_target_fast(
                 target_image_path,
                 estimator,
                 matcher,
-                comparison_images,  # Use normal comparison images (cache handled internally)
+                comparison_poses_data,  # Use pre-loaded poses data
                 args,
                 frame_idx,
             )
@@ -1077,29 +1175,23 @@ def process_batch_targets(args):
             if results and args.layer_poses:
                 best_result = results[0]
 
-                # Load the comparison image and extract poses
+                # Get the comparison image and pose from pre-loaded data
                 comp_img = None
                 comp_pose = None
 
-                try:
-                    comp_img = load_image(best_result.comparison_image)
-                    comp_poses = estimator.extract_poses(comp_img, best_result.comparison_image)
+                pose_data = comparison_poses_data.get(best_result.comparison_image)
+                if pose_data and pose_data['image'] is not None and pose_data['poses']:
+                    comp_img = pose_data['image']
                     
-                    if comp_poses:
-                        # Find the specific pose that gave this result
-                        if (
-                            hasattr(best_result, "comparison_pose")
-                            and best_result.comparison_pose
-                        ):
-                            comp_pose = best_result.comparison_pose
-                        else:
-                            # Fallback to highest confidence pose
-                            comp_pose = max(comp_poses, key=lambda p: p.confidence_score)
-                except Exception as e:
-                    if args.verbose:
-                        print(f"Warning: Failed to load comparison image: {e}")
-                    comp_img = None
-                    comp_pose = None
+                    # Find the specific pose that gave this result
+                    if (
+                        hasattr(best_result, "comparison_pose")
+                        and best_result.comparison_pose
+                    ):
+                        comp_pose = best_result.comparison_pose
+                    else:
+                        # Fallback to highest confidence pose
+                        comp_pose = max(pose_data['poses'], key=lambda p: p.confidence_score)
 
                 if comp_pose and comp_img is not None:
                     # Create sequential frame output name
