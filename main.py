@@ -34,7 +34,7 @@ def parse_arguments():
         help="Path to target image OR directory of target images (not required if using --video-input)",
     )
     parser.add_argument(
-        "--comparison-dir", required=True, help="Directory containing comparison images"
+        "--comparison-dir", help="Directory containing comparison images (required unless using --clear-cache only)"
     )
     parser.add_argument(
         "--random-target",
@@ -1459,10 +1459,22 @@ def main():
     args = parse_arguments()
 
     # Validate required arguments
+    # Allow cache clearing without other arguments
+    if args.clear_cache and not args.target and not args.video_input:
+        from pose_cache import PoseCache
+        PoseCache().clear_cache()
+        print("✅ Pose cache cleared.")
+        sys.exit(0)
+
     if not args.target and not args.video_input:
         print("❌ Error: Either --target or --video-input must be specified")
         print("   Use --target for image/directory processing")
         print("   Use --video-input for video processing")
+        sys.exit(1)
+
+    # Validate comparison-dir is provided when not just clearing cache
+    if not args.comparison_dir:
+        print("❌ Error: --comparison-dir is required")
         sys.exit(1)
 
     try:
