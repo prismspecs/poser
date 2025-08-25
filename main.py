@@ -30,8 +30,7 @@ def parse_arguments():
     )
     parser.add_argument(
         "--target",
-        required=True,
-        help="Path to target image OR directory of target images",
+        help="Path to target image OR directory of target images (not required if using --video-input)",
     )
     parser.add_argument(
         "--comparison-dir", required=True, help="Directory containing comparison images"
@@ -832,7 +831,7 @@ def cleanup_temporary_frames(frames_dir: str, verbose: bool = False) -> bool:
 
 
 def process_single_target(
-    target_image_path, estimator, matcher, comparison_data, args, frame_number=None
+    target_image_path, estimator, matcher, comparison_images, args, frame_number=None
 ):
     """Process a single target image and return results."""
     if args.verbose:
@@ -860,28 +859,17 @@ def process_single_target(
                 f"Found {len(target_poses)} people in target image, using highest confidence person"
             )
 
-    # Process comparison images - handle both cached and non-cached modes
-    if isinstance(comparison_data, dict):  # Cached poses
-        results, total_time, pose_extraction_time, pose_matching_time = (
-            process_comparison_images_with_cache(
-                matcher,
-                target_pose,
-                comparison_data,
-                args.relative_visibility_threshold,
-                args.verbose,
-            )
+    # Process comparison images using the normal flow (which uses cache automatically)
+    results, total_time, pose_extraction_time, pose_matching_time = (
+        process_comparison_images(
+            estimator,
+            matcher,
+            target_pose,
+            comparison_images,
+            args.relative_visibility_threshold,
+            args.verbose,
         )
-    else:  # Original list of comparison images
-        results, total_time, pose_extraction_time, pose_matching_time = (
-            process_comparison_images(
-                estimator,
-                matcher,
-                target_pose,
-                comparison_data,
-                args.relative_visibility_threshold,
-                args.verbose,
-            )
-        )
+    )
 
     # Sort results
     results.sort(key=lambda x: x.similarity_score, reverse=True)
@@ -889,82 +877,7 @@ def process_single_target(
     return target_image, target_pose, results, target_time
 
 
-def pre_extract_comparison_poses(estimator, comparison_images, verbose=False):
-    """Pre-extract poses from all comparison images once for efficiency."""
-    comparison_poses_cache = {}
 
-    if verbose:
-        print(
-            f"\n📋 Pre-extracting poses from {len(comparison_images)} comparison images..."
-        )
-
-    for i, img_path in enumerate(comparison_images, 1):
-        if verbose:
-            print(
-                f"   Extracting poses from {i:3d}/{len(comparison_images)}: {img_path.name}"
-            )
-
-        try:
-            comparison_image = load_image(str(img_path))
-            poses = estimator.extract_poses(comparison_image, str(img_path))
-            comparison_poses_cache[str(img_path)] = {
-                "poses": poses,
-                "image": comparison_image,
-            }
-        except Exception as e:
-            if verbose:
-                print(f"   Warning: Failed to extract poses from {img_path.name}: {e}")
-            comparison_poses_cache[str(img_path)] = {"poses": [], "image": None}
-
-    if verbose:
-        total_poses = sum(
-            len(data["poses"]) for data in comparison_poses_cache.values()
-        )
-        print(
-            f"✅ Pre-extraction complete: {total_poses} total poses from {len(comparison_images)} images"
-        )
-
-    return comparison_poses_cache
-
-
-def process_comparison_images_with_cache(
-    matcher,
-    target_pose,
-    comparison_poses_cache,
-    relative_visibility_threshold,
-    verbose=False,
-):
-    """Process comparison images using pre-extracted poses."""
-    results = []
-    comparison_start_time = time.time()
-    total_pose_matching_time = 0.0
-
-    if verbose:
-        print(
-            f"🔄 Matching against {len(comparison_poses_cache)} cached comparison images..."
-        )
-
-    for img_path, cache_data in comparison_poses_cache.items():
-        comparison_poses = cache_data["poses"]
-
-        if comparison_poses:
-            start_time = time.time()
-            best_match = matcher.find_best_match(
-                target_pose, comparison_poses, relative_visibility_threshold
-            )
-            match_time = time.time() - start_time
-            total_pose_matching_time += match_time
-
-            if best_match:
-                results.append(best_match)
-
-    total_time = time.time() - comparison_start_time
-    return (
-        results,
-        total_time,
-        0.0,
-        total_pose_matching_time,
-    )  # pose_extraction_time is 0 since pre-extracted
 
 
 def process_video_workflow(args):
@@ -1096,11 +1009,6 @@ def process_batch_targets(args):
     if args.verbose:
         print(f"Model initialization took: {init_time:.2f} seconds")
 
-    # Pre-extract poses from all comparison images once
-    comparison_poses_cache = pre_extract_comparison_poses(
-        estimator, comparison_images, args.verbose
-    )
-
     matcher = PoseMatcher()
 
     # Create output directory structure
@@ -1123,7 +1031,7 @@ def process_batch_targets(args):
                 target_image_path,
                 estimator,
                 matcher,
-                comparison_poses_cache,  # Use cached poses instead of comparison_images
+                comparison_images,  # Use normal comparison images (cache handled internally)
                 args,
                 frame_idx,
             )
@@ -1137,29 +1045,29 @@ def process_batch_targets(args):
             if results and args.layer_poses:
                 best_result = results[0]
 
-                # Get the comparison image and pose directly from cache
+                # Load the comparison image and extract poses
                 comp_img = None
                 comp_pose = None
 
-                cache_data = comparison_poses_cache.get(best_result.comparison_image)
-                if (
-                    cache_data
-                    and cache_data["image"] is not None
-                    and cache_data["poses"]
-                ):
-                    comp_img = cache_data["image"]
-
-                    # Find the specific pose that gave this result
-                    if (
-                        hasattr(best_result, "comparison_pose")
-                        and best_result.comparison_pose
-                    ):
-                        comp_pose = best_result.comparison_pose
-                    else:
-                        # Fallback to highest confidence pose
-                        comp_pose = max(
-                            cache_data["poses"], key=lambda p: p.confidence_score
-                        )
+                try:
+                    comp_img = load_image(best_result.comparison_image)
+                    comp_poses = estimator.extract_poses(comp_img, best_result.comparison_image)
+                    
+                    if comp_poses:
+                        # Find the specific pose that gave this result
+                        if (
+                            hasattr(best_result, "comparison_pose")
+                            and best_result.comparison_pose
+                        ):
+                            comp_pose = best_result.comparison_pose
+                        else:
+                            # Fallback to highest confidence pose
+                            comp_pose = max(comp_poses, key=lambda p: p.confidence_score)
+                except Exception as e:
+                    if args.verbose:
+                        print(f"Warning: Failed to load comparison image: {e}")
+                    comp_img = None
+                    comp_pose = None
 
                 if comp_pose and comp_img is not None:
                     # Create sequential frame output name
@@ -1249,6 +1157,13 @@ def save_results(results, output_path, target_pose):
 def main():
     """Main application entry point."""
     args = parse_arguments()
+
+    # Validate required arguments
+    if not args.target and not args.video_input:
+        print("❌ Error: Either --target or --video-input must be specified")
+        print("   Use --target for image/directory processing")
+        print("   Use --video-input for video processing")
+        sys.exit(1)
 
     try:
         # Check if video processing mode is enabled
