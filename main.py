@@ -1189,6 +1189,24 @@ def process_batch_targets(args):
     # Create output directory structure
     output_dir = Path(args.output_dir)
     layer_output_dir = output_dir / "batch_layered_poses"
+    
+    # Clean up previous batch results to avoid conflicts
+    if layer_output_dir.exists():
+        if args.verbose:
+            old_frames = list(layer_output_dir.glob("frame_*.png"))
+            if old_frames:
+                print(f"🧹 Cleaning up {len(old_frames)} old processed frames...")
+        
+        # Remove old frame files but keep directory
+        for old_frame in layer_output_dir.glob("frame_*.png"):
+            old_frame.unlink()
+        
+        # Also clean up any temporary sequential directories
+        temp_seq_dir = layer_output_dir / "temp_sequential"
+        if temp_seq_dir.exists():
+            import shutil
+            shutil.rmtree(temp_seq_dir, ignore_errors=True)
+    
     layer_output_dir.mkdir(parents=True, exist_ok=True)
 
     batch_start_time = time.time()
