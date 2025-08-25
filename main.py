@@ -940,11 +940,8 @@ def process_single_target_fast(
                 f"Found {len(target_poses)} people in target image, using highest confidence person"
             )
 
-    # Fast comparison using pre-loaded poses
-    if args.verbose:
-        print(
-            f"🔄 Matching against {len(comparison_poses_data)} pre-loaded comparison poses..."
-        )
+    # Fast comparison using pre-loaded poses (less verbose for speed)
+    # Skip verbose output during matching for better performance
 
     results = []
     start_time = time.time()
@@ -962,8 +959,9 @@ def process_single_target_fast(
 
     match_time = time.time() - start_time
 
-    if args.verbose:
-        print(f"Pose matching took: {match_time:.2f} seconds")
+    # Only show timing for verbose mode and only occasionally for performance
+    if args.verbose and frame_number and frame_number % 50 == 1:
+        print(f"   Frame {frame_number}: Pose matching took: {match_time:.2f} seconds")
 
     # Sort results
     results.sort(key=lambda x: x.similarity_score, reverse=True)
@@ -1106,7 +1104,9 @@ def process_batch_targets(args):
     # Pre-load all comparison poses efficiently using cache
     if args.verbose:
         print(f"\n📋 Loading poses from {len(comparison_images)} comparison images...")
-        print(f"💾 Cache database contains {len(estimator.cache.cache) if estimator.cache else 0} cached images")
+        print(
+            f"💾 Cache database contains {len(estimator.cache.cache) if estimator.cache else 0} cached images"
+        )
 
     comparison_poses_data = {}
     cache_hits = 0
@@ -1114,35 +1114,47 @@ def process_batch_targets(args):
     start_time = time.time()
 
     for i, img_path in enumerate(comparison_images, 1):
-        if args.verbose and i % 500 == 0:  # Less frequent updates for speed
+        # Only show progress every 1000 items for minimal console overhead
+        if args.verbose and i % 1000 == 0:
             elapsed = time.time() - start_time
             rate = i / elapsed if elapsed > 0 else 0
-            print(f"   Loading {i}/{len(comparison_images)} comparison poses... ({rate:.0f}/sec)")
+            print(f"   {i}/{len(comparison_images)} poses ({rate:.0f}/sec)")  # Shorter message
 
         try:
             # Check if this will be a cache hit first (without loading image)
             if estimator.cache and estimator.cache.is_cached(str(img_path)):
                 # Cache hit - get poses without loading full image
                 poses = estimator.cache.get_cached_poses(str(img_path))
-                comparison_poses_data[str(img_path)] = {"poses": poses, "image_path": str(img_path)}
+                comparison_poses_data[str(img_path)] = {
+                    "poses": poses,
+                    "image_path": str(img_path),
+                }
                 cache_hits += 1
             else:
                 # Cache miss - need to load image and extract poses
                 img_array = load_image(str(img_path))
                 poses = estimator.extract_poses(img_array, str(img_path))
-                comparison_poses_data[str(img_path)] = {"poses": poses, "image_path": str(img_path)}
+                comparison_poses_data[str(img_path)] = {
+                    "poses": poses,
+                    "image_path": str(img_path),
+                }
                 cache_misses += 1
 
         except Exception as e:
             if args.verbose:
                 print(f"   Warning: Failed to load poses from {img_path.name}: {e}")
-            comparison_poses_data[str(img_path)] = {"poses": [], "image_path": str(img_path)}
+            comparison_poses_data[str(img_path)] = {
+                "poses": [],
+                "image_path": str(img_path),
+            }
 
     if args.verbose:
         total_poses = sum(len(data["poses"]) for data in comparison_poses_data.values())
         elapsed = time.time() - start_time
         rate = len(comparison_images) / elapsed if elapsed > 0 else 0
-        print(f"✅ Loaded {total_poses} poses from {len(comparison_images)} images in {elapsed:.1f}s ({rate:.0f}/sec)")
+        print(
+            f"✅ Loaded {total_poses} poses from {len(comparison_images)} images in {elapsed:.1f}s ({rate:.0f}/sec)"
+        )
         print(f"📊 Cache stats: {cache_hits} hits, {cache_misses} misses")
 
     matcher = PoseMatcher()
@@ -1158,9 +1170,11 @@ def process_batch_targets(args):
 
     # Process each target image
     for frame_idx, target_image_path in enumerate(target_images, 1):
-        print(
-            f"\n🎞️ Processing frame {frame_idx:04d}/{len(target_images):04d}: {Path(target_image_path).name}"
-        )
+        # Reduce console output frequency for better performance
+        if frame_idx % 10 == 1 or args.verbose:
+            print(
+                f"\n🎞️ Processing frame {frame_idx:04d}/{len(target_images):04d}: {Path(target_image_path).name}"
+            )
 
         try:
             target_image, target_pose, results, target_time = (
