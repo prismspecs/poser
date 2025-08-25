@@ -53,6 +53,12 @@ Simple run program and output a test composition
 python3 main.py --target data/target_images/dancing1.jpg --comparison-dir data/comparison_images/ --visualize
 ```
 
+Video in/out
+```bash
+# Complete video workflow in one command
+python3 main.py --video-input input_video.mp4 --comparison-dir data/comparison_images --video-output output_video.mp4 --cleanup-frames --verbose
+```
+
 This will create:
 - `pose_comparison_[target].jpg` - Main grid showing target, overlay, and comparisons
 - `keypoint_analysis_[target].jpg` - Detailed keypoint comparison

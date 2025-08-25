@@ -1095,6 +1095,7 @@ def process_batch_targets(args):
         confidence_threshold=args.threshold,
         model_size=args.model_size,
         use_cache=not args.no_cache,
+        verbose=args.verbose,
     )
     init_time = time.time() - start_time
 
@@ -1228,8 +1229,10 @@ def process_batch_targets(args):
         else:
             # Simple progress meter for non-verbose mode
             if frame_idx == 1:
-                print(f"\n🎞️ Processing {len(target_images)} frames: ", end="", flush=True)
-            
+                print(
+                    f"\n🎞️ Processing {len(target_images)} frames: ", end="", flush=True
+                )
+
             # Show progress dots/indicators
             if frame_idx % 50 == 0:
                 print(f"{frame_idx}", end="", flush=True)
@@ -1369,6 +1372,7 @@ def process_batch_targets(args):
             if args.verbose:
                 print(f"❌ Error processing frame {frame_idx:04d}: {e}")
                 import traceback
+
                 traceback.print_exc()
             failed_frames += 1
 
@@ -1458,6 +1462,7 @@ def main():
             confidence_threshold=args.threshold,
             model_size=args.model_size,
             use_cache=not args.no_cache,
+            verbose=args.verbose,
         )
         init_time = time.time() - start_time
 

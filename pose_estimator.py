@@ -48,6 +48,7 @@ class PoseEstimator:
         confidence_threshold: float = 0.7,
         model_size: str = "n",
         use_cache: bool = True,
+        verbose: bool = False,
     ):
         """
         Initialize the pose estimator.
@@ -56,12 +57,14 @@ class PoseEstimator:
             confidence_threshold: Minimum confidence for pose detection
             model_size: YOLO model size ('n', 's', 'm', 'l', 'x')
             use_cache: Whether to use pose caching for speed
+            verbose: Whether to show warning messages
         """
         self.confidence_threshold = confidence_threshold
         self.model_size = model_size
         self.model = None
         self.segmentation_model = None  # For body segmentation
         self.use_cache = use_cache
+        self.verbose = verbose
         self.cache = PoseCache() if use_cache else None
         self._initialize_model()
 
@@ -311,7 +314,8 @@ class PoseEstimator:
             Image with human bodies preserved and background set to specified color
         """
         if self.segmentation_model is None:
-            print("Warning: Segmentation model not available, returning original image")
+            if self.verbose:
+                print("Warning: Segmentation model not available, returning original image")
             return image
 
         try:
@@ -350,7 +354,8 @@ class PoseEstimator:
             return output_image
 
         except Exception as e:
-            print(f"Warning: Failed to create body mask: {e}")
+            if self.verbose:
+                print(f"Warning: Failed to create body mask: {e}")
             return image
 
     def create_pose_specific_mask(
@@ -374,7 +379,8 @@ class PoseEstimator:
             Image with only the specific pose preserved and background set to specified color
         """
         if self.segmentation_model is None:
-            print("Warning: Segmentation model not available, returning original image")
+            if self.verbose:
+                print("Warning: Segmentation model not available, returning original image")
             return image
 
         try:
@@ -392,7 +398,8 @@ class PoseEstimator:
 
             # Validate bounding box
             if x2 <= x1 or y2 <= y1:
-                print("Warning: Invalid bounding box for pose-specific masking")
+                if self.verbose:
+                    print("Warning: Invalid bounding box for pose-specific masking")
                 return image
 
             # Crop the image to the pose region
@@ -478,15 +485,17 @@ class PoseEstimator:
 
             else:
                 # No segmentation result, fallback to keypoint-based mask
-                print(
-                    "Warning: No segmentation mask found, using keypoint-based fallback"
-                )
+                if self.verbose:
+                    print(
+                        "Warning: No segmentation mask found, using keypoint-based fallback"
+                    )
                 return self._create_keypoint_based_mask(image, pose, background_color)
 
             return output_image
 
         except Exception as e:
-            print(f"Warning: Failed to create pose-specific mask: {e}")
+            if self.verbose:
+                print(f"Warning: Failed to create pose-specific mask: {e}")
             # Fallback to keypoint-based mask
             return self._create_keypoint_based_mask(image, pose, background_color)
 
@@ -518,7 +527,8 @@ class PoseEstimator:
 
             if len(valid_keypoints) < 6:
                 # Not enough keypoints for a meaningful mask, just return original
-                print("Warning: Not enough keypoints for fallback mask")
+                if self.verbose:
+                    print("Warning: Not enough keypoints for fallback mask")
                 return image
 
             # Create mask from convex hull of keypoints
@@ -545,7 +555,8 @@ class PoseEstimator:
             return output_image
 
         except Exception as e:
-            print(f"Warning: Failed to create keypoint-based mask: {e}")
+            if self.verbose:
+                print(f"Warning: Failed to create keypoint-based mask: {e}")
             return image
 
     def create_pose_specific_mask_with_transparency(
@@ -571,7 +582,8 @@ class PoseEstimator:
             - alpha_mask: Binary mask for transparency (0=transparent, 255=opaque)
         """
         if self.segmentation_model is None:
-            print("Warning: Segmentation model not available, returning original image")
+            if self.verbose:
+                print("Warning: Segmentation model not available, returning original image")
             return image, np.ones(image.shape[:2], dtype=np.uint8) * 255
 
         try:
@@ -588,7 +600,8 @@ class PoseEstimator:
 
             # Validate bounding box
             if x2 <= x1 or y2 <= y1:
-                print("Warning: Invalid bounding box for pose-specific masking")
+                if self.verbose:
+                    print("Warning: Invalid bounding box for pose-specific masking")
                 return image, np.ones(image.shape[:2], dtype=np.uint8) * 255
 
             # Crop the image to the pose region
@@ -666,9 +679,10 @@ class PoseEstimator:
 
             else:
                 # No segmentation result, fallback to keypoint-based mask
-                print(
-                    "Warning: No segmentation mask found, using keypoint-based fallback"
-                )
+                if self.verbose:
+                    print(
+                        "Warning: No segmentation mask found, using keypoint-based fallback"
+                    )
                 return self._create_keypoint_based_mask_with_transparency(
                     image, pose, background_color
                 )
@@ -705,7 +719,8 @@ class PoseEstimator:
             ]
 
             if len(valid_keypoints) < 6:
-                print("Warning: Not enough keypoints for fallback mask")
+                if self.verbose:
+                    print("Warning: Not enough keypoints for fallback mask")
                 return image, np.ones(image.shape[:2], dtype=np.uint8) * 255
 
             # Create alpha mask from convex hull of keypoints
