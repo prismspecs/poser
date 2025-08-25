@@ -1113,36 +1113,63 @@ def process_batch_targets(args):
     cache_misses = 0
     start_time = time.time()
 
-    for i, img_path in enumerate(comparison_images, 1):
-        # Only show progress every 1000 items for minimal console overhead
-        if args.verbose and i % 1000 == 0:
+    # Optimize database loading by separating cached vs uncached
+    if args.verbose:
+        print("⚡ Optimizing comparison database loading...")
+    
+    # Pre-check which images are cached vs need extraction
+    cached_paths = []
+    uncached_paths = []
+    
+    check_start = time.time()
+    for img_path in comparison_images:
+        if estimator.cache and estimator.cache.is_cached(str(img_path)):
+            cached_paths.append(img_path)
+        else:
+            uncached_paths.append(img_path)
+    
+    if args.verbose:
+        check_time = time.time() - check_start
+        print(f"💾 Cache check ({check_time:.1f}s): {len(cached_paths)} cached, {len(uncached_paths)} need extraction")
+    
+    # Batch process cached images (should be very fast)
+    for i, img_path in enumerate(cached_paths, 1):
+        if args.verbose and i % 2000 == 0:  # Less frequent for cached items
             elapsed = time.time() - start_time
             rate = i / elapsed if elapsed > 0 else 0
-            print(f"   {i}/{len(comparison_images)} poses ({rate:.0f}/sec)")  # Shorter message
+            print(f"   Loaded {i}/{len(cached_paths)} cached poses ({rate:.0f}/sec)")
 
         try:
-            # Check if this will be a cache hit first (without loading image)
-            if estimator.cache and estimator.cache.is_cached(str(img_path)):
-                # Cache hit - get poses without loading full image
-                poses = estimator.cache.get_cached_poses(str(img_path))
-                comparison_poses_data[str(img_path)] = {
-                    "poses": poses,
-                    "image_path": str(img_path),
-                }
-                cache_hits += 1
-            else:
-                # Cache miss - need to load image and extract poses
-                img_array = load_image(str(img_path))
-                poses = estimator.extract_poses(img_array, str(img_path))
-                comparison_poses_data[str(img_path)] = {
-                    "poses": poses,
-                    "image_path": str(img_path),
-                }
-                cache_misses += 1
-
+            poses = estimator.cache.get_cached_poses(str(img_path))
+            comparison_poses_data[str(img_path)] = {
+                "poses": poses,
+                "image_path": str(img_path),
+            }
+            cache_hits += 1
         except Exception as e:
             if args.verbose:
-                print(f"   Warning: Failed to load poses from {img_path.name}: {e}")
+                print(f"   Warning: Failed to load cached poses from {img_path.name}: {e}")
+            comparison_poses_data[str(img_path)] = {
+                "poses": [],
+                "image_path": str(img_path),
+            }
+    
+    # Process uncached images (slower but necessary)
+    for i, img_path in enumerate(uncached_paths, 1):
+        if args.verbose:
+            print(f"   Extracting {i}/{len(uncached_paths)}: {img_path.name}")
+
+        try:
+            img_array = load_image(str(img_path))
+            poses = estimator.extract_poses(img_array, str(img_path))
+            comparison_poses_data[str(img_path)] = {
+                "poses": poses,
+                "image_path": str(img_path),
+            }
+            cache_misses += 1
+        except Exception as e:
+            if args.verbose:
+                print(f"   Warning: Failed to extract poses from {img_path.name}: {e}")
             comparison_poses_data[str(img_path)] = {
                 "poses": [],
                 "image_path": str(img_path),
@@ -1189,8 +1216,35 @@ def process_batch_targets(args):
             )
 
             if target_pose is None or not results:
-                print(f"⚠️  Skipping frame {frame_idx:04d}: No pose found or no matches")
-                failed_frames += 1
+                # Instead of skipping, use the original frame
+                if args.verbose:
+                    print(f"📷 Frame {frame_idx:04d}: No pose/matches found, using original frame")
+                
+                # Create output with original frame
+                if args.layer_poses:
+                    try:
+                        # Load the original target image
+                        original_image = load_image(target_image_path)
+                        
+                        # Save as original frame without pose overlay
+                        frame_output_path = (
+                            layer_output_dir / f"frame_{frame_idx:04d}_original.png"
+                        )
+                        
+                        # Convert BGR to RGBA and save
+                        import cv2
+                        original_rgba = cv2.cvtColor(original_image, cv2.COLOR_BGR2BGRA)
+                        cv2.imwrite(str(frame_output_path), original_rgba)
+                        
+                        if args.verbose:
+                            print(f"✅ Frame {frame_idx:04d} saved as original: {frame_output_path.name}")
+                        successful_frames += 1
+                        
+                    except Exception as e:
+                        print(f"❌ Error saving original frame {frame_idx:04d}: {e}")
+                        failed_frames += 1
+                else:
+                    failed_frames += 1
                 continue
 
             # Generate layered pose for the best match
