@@ -745,37 +745,63 @@ def create_video_from_frames(
         print(f"❌ Frames directory not found: {frames_dir}")
         return False
     
-    # Check if we have any frame files
-    frame_files = list(frames_path.glob(frame_pattern.replace("%04d", "*")))
+    # Get all frame files and sort them numerically
+    frame_files = list(frames_path.glob("frame_*.png"))
     if not frame_files:
-        print(f"❌ No frame files found matching pattern: {frame_pattern}")
+        print(f"❌ No frame files found in {frames_dir}")
         return False
     
-    # Build ffmpeg command for creating video
-    input_pattern = str(frames_path / frame_pattern)
-    cmd = [
-        "ffmpeg", "-y",
-        "-framerate", str(fps),
-        "-i", input_pattern,
-        "-c:v", "libx264",
-        "-pix_fmt", "yuv420p",
-        "-crf", "18",  # High quality
-        output_video
-    ]
+    # Sort by frame number extracted from filename
+    def get_frame_number(filename):
+        # Extract frame number from "frame_XXXX_something.png"
+        try:
+            parts = filename.stem.split('_')
+            return int(parts[1])  # frame_0001_something -> 0001
+        except (IndexError, ValueError):
+            return 0
     
-    if verbose:
-        print(f"🎬 Creating video from {len(frame_files)} frames")
-        print(f"📁 Input pattern: {input_pattern}")
-        print(f"📤 Output video: {output_video}")
-        print(f"🎯 FPS: {fps}")
+    frame_files.sort(key=get_frame_number)
+    
+    # Create a temporary directory with sequential frame names for FFmpeg
+    temp_frames_dir = frames_path / "temp_sequential"
+    temp_frames_dir.mkdir(exist_ok=True)
     
     try:
+        # Create symbolic links with sequential names
+        for i, frame_file in enumerate(frame_files, 1):
+            temp_link = temp_frames_dir / f"frame_{i:04d}.png"
+            if temp_link.exists():
+                temp_link.unlink()
+            temp_link.symlink_to(frame_file.resolve())
+        
+        # Build ffmpeg command with sequential pattern
+        input_pattern = str(temp_frames_dir / "frame_%04d.png")
+        cmd = [
+            "ffmpeg", "-y",
+            "-framerate", str(fps),
+            "-i", input_pattern,
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-crf", "18",  # High quality
+            output_video
+        ]
+        
+        if verbose:
+            print(f"🎬 Creating video from {len(frame_files)} frames")
+            print(f"📁 Input pattern: {input_pattern}")
+            print(f"📤 Output video: {output_video}")
+            print(f"🎯 FPS: {fps}")
+        
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=600  # 10 minute timeout
         )
+        
+        # Cleanup temporary directory
+        import shutil
+        shutil.rmtree(temp_frames_dir, ignore_errors=True)
         
         if result.returncode != 0:
             print(f"❌ FFmpeg error creating video: {result.stderr}")
@@ -787,9 +813,15 @@ def create_video_from_frames(
         return True
         
     except subprocess.TimeoutExpired:
+        # Cleanup on timeout
+        import shutil
+        shutil.rmtree(temp_frames_dir, ignore_errors=True)
         print("❌ Video creation timed out (>10 minutes)")
         return False
     except Exception as e:
+        # Cleanup on error
+        import shutil
+        shutil.rmtree(temp_frames_dir, ignore_errors=True)
         print(f"❌ Error creating video: {e}")
         return False
 
