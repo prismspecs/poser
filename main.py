@@ -1116,22 +1116,24 @@ def process_batch_targets(args):
     # Optimize database loading by separating cached vs uncached
     if args.verbose:
         print("⚡ Optimizing comparison database loading...")
-    
+
     # Pre-check which images are cached vs need extraction
     cached_paths = []
     uncached_paths = []
-    
+
     check_start = time.time()
     for img_path in comparison_images:
         if estimator.cache and estimator.cache.is_cached(str(img_path)):
             cached_paths.append(img_path)
         else:
             uncached_paths.append(img_path)
-    
+
     if args.verbose:
         check_time = time.time() - check_start
-        print(f"💾 Cache check ({check_time:.1f}s): {len(cached_paths)} cached, {len(uncached_paths)} need extraction")
-    
+        print(
+            f"💾 Cache check ({check_time:.1f}s): {len(cached_paths)} cached, {len(uncached_paths)} need extraction"
+        )
+
     # Batch process cached images (should be very fast)
     for i, img_path in enumerate(cached_paths, 1):
         if args.verbose and i % 2000 == 0:  # Less frequent for cached items
@@ -1148,12 +1150,14 @@ def process_batch_targets(args):
             cache_hits += 1
         except Exception as e:
             if args.verbose:
-                print(f"   Warning: Failed to load cached poses from {img_path.name}: {e}")
+                print(
+                    f"   Warning: Failed to load cached poses from {img_path.name}: {e}"
+                )
             comparison_poses_data[str(img_path)] = {
                 "poses": [],
                 "image_path": str(img_path),
             }
-    
+
     # Process uncached images (slower but necessary)
     for i, img_path in enumerate(uncached_paths, 1):
         if args.verbose:
@@ -1189,24 +1193,25 @@ def process_batch_targets(args):
     # Create output directory structure
     output_dir = Path(args.output_dir)
     layer_output_dir = output_dir / "batch_layered_poses"
-    
+
     # Clean up previous batch results to avoid conflicts
     if layer_output_dir.exists():
         if args.verbose:
             old_frames = list(layer_output_dir.glob("frame_*.png"))
             if old_frames:
                 print(f"🧹 Cleaning up {len(old_frames)} old processed frames...")
-        
+
         # Remove old frame files but keep directory
         for old_frame in layer_output_dir.glob("frame_*.png"):
             old_frame.unlink()
-        
+
         # Also clean up any temporary sequential directories
         temp_seq_dir = layer_output_dir / "temp_sequential"
         if temp_seq_dir.exists():
             import shutil
+
             shutil.rmtree(temp_seq_dir, ignore_errors=True)
-    
+
     layer_output_dir.mkdir(parents=True, exist_ok=True)
 
     batch_start_time = time.time()
@@ -1215,11 +1220,21 @@ def process_batch_targets(args):
 
     # Process each target image
     for frame_idx, target_image_path in enumerate(target_images, 1):
-        # Reduce console output frequency for better performance
-        if frame_idx % 10 == 1 or args.verbose:
+        # Progress indicator - different behavior for verbose vs non-verbose
+        if args.verbose:
             print(
                 f"\n🎞️ Processing frame {frame_idx:04d}/{len(target_images):04d}: {Path(target_image_path).name}"
             )
+        else:
+            # Simple progress meter for non-verbose mode
+            if frame_idx == 1:
+                print(f"\n🎞️ Processing {len(target_images)} frames: ", end="", flush=True)
+            
+            # Show progress dots/indicators
+            if frame_idx % 50 == 0:
+                print(f"{frame_idx}", end="", flush=True)
+            elif frame_idx % 10 == 0:
+                print(".", end="", flush=True)
 
         try:
             target_image, target_pose, results, target_time = (
@@ -1236,28 +1251,35 @@ def process_batch_targets(args):
             if target_pose is None or not results:
                 # Instead of skipping, use the original frame
                 if args.verbose:
-                    print(f"📷 Frame {frame_idx:04d}: No pose/matches found, using original frame")
-                
+                    print(
+                        f"📷 Frame {frame_idx:04d}: No pose/matches found, using original frame"
+                    )
+                elif frame_idx % 50 == 0:
+                    print("o", end="", flush=True)  # Show 'o' for original frames
+
                 # Create output with original frame
                 if args.layer_poses:
                     try:
                         # Load the original target image
                         original_image = load_image(target_image_path)
-                        
+
                         # Save as original frame without pose overlay
                         frame_output_path = (
                             layer_output_dir / f"frame_{frame_idx:04d}_original.png"
                         )
-                        
+
                         # Convert BGR to RGBA and save
                         import cv2
+
                         original_rgba = cv2.cvtColor(original_image, cv2.COLOR_BGR2BGRA)
                         cv2.imwrite(str(frame_output_path), original_rgba)
-                        
+
                         if args.verbose:
-                            print(f"✅ Frame {frame_idx:04d} saved as original: {frame_output_path.name}")
+                            print(
+                                f"✅ Frame {frame_idx:04d} saved as original: {frame_output_path.name}"
+                            )
                         successful_frames += 1
-                        
+
                     except Exception as e:
                         print(f"❌ Error saving original frame {frame_idx:04d}: {e}")
                         failed_frames += 1
@@ -1314,35 +1336,39 @@ def process_batch_targets(args):
                         )
 
                         if layered_vis is not None:
-                            print(
-                                f"✅ Frame {frame_idx:04d} saved: {frame_output_path.name} (similarity: {best_result.similarity_score:.3f})"
-                            )
+                            if args.verbose:
+                                print(
+                                    f"✅ Frame {frame_idx:04d} saved: {frame_output_path.name} (similarity: {best_result.similarity_score:.3f})"
+                                )
                             successful_frames += 1
                         else:
-                            print(
-                                f"❌ Failed to create layered visualization for frame {frame_idx:04d}"
-                            )
+                            if args.verbose:
+                                print(
+                                    f"❌ Failed to create layered visualization for frame {frame_idx:04d}"
+                                )
                             failed_frames += 1
 
                     except Exception as e:
-                        print(
-                            f"❌ Error creating layered visualization for frame {frame_idx:04d}: {e}"
-                        )
+                        if args.verbose:
+                            print(
+                                f"❌ Error creating layered visualization for frame {frame_idx:04d}: {e}"
+                            )
                         failed_frames += 1
                 else:
-                    print(
-                        f"⚠️  No suitable comparison pose found for frame {frame_idx:04d}"
-                    )
+                    if args.verbose:
+                        print(
+                            f"⚠️  No suitable comparison pose found for frame {frame_idx:04d}"
+                        )
                     failed_frames += 1
             else:
-                print(f"⚠️  No results found for frame {frame_idx:04d}")
+                if args.verbose:
+                    print(f"⚠️  No results found for frame {frame_idx:04d}")
                 failed_frames += 1
 
         except Exception as e:
-            print(f"❌ Error processing frame {frame_idx:04d}: {e}")
             if args.verbose:
+                print(f"❌ Error processing frame {frame_idx:04d}: {e}")
                 import traceback
-
                 traceback.print_exc()
             failed_frames += 1
 
