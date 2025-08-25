@@ -62,11 +62,12 @@ def main():
         print(f"❌ Comparison images directory not found: {comparison_dir}")
         return
 
-    # Count comparison images
+    # Count comparison images (recursively)
     comparison_images = (
-        list(comparison_dir.glob("*.jpg"))
-        + list(comparison_dir.glob("*.jpeg"))
-        + list(comparison_dir.glob("*.png"))
+        list(comparison_dir.rglob("*.jpg"))
+        + list(comparison_dir.rglob("*.jpeg"))
+        + list(comparison_dir.rglob("*.png"))
+        + list(comparison_dir.rglob("*.webp"))
     )
 
     print(f"📊 Found {len(comparison_images)} comparison images in database")

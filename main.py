@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 import cv2
 import numpy as np
+from tqdm import tqdm
 
 from pose_estimator import PoseEstimator
 from pose_matcher import PoseMatcher
@@ -191,16 +192,20 @@ def get_target_images_for_batch(args) -> List[str]:
 
 
 def get_comparison_images(comparison_dir: Path) -> List[Path]:
-    """Get list of comparison image paths."""
+    """Get list of comparison image paths, recursively searching nested folders."""
+    # Recursively find all image files in comparison directory and subdirectories
     comparison_images = (
-        list(comparison_dir.glob("*.jpg"))
-        + list(comparison_dir.glob("*.jpeg"))
-        + list(comparison_dir.glob("*.png"))
-        + list(comparison_dir.glob("*.webp"))
+        list(comparison_dir.rglob("*.jpg"))
+        + list(comparison_dir.rglob("*.jpeg"))
+        + list(comparison_dir.rglob("*.png"))
+        + list(comparison_dir.rglob("*.webp"))
     )
+    
     if not comparison_images:
         print(f"Error: No image files found in comparison directory: {comparison_dir}")
+        print("Tip: Checked all subdirectories recursively for .jpg, .jpeg, .png, .webp files")
         sys.exit(1)
+    
     return comparison_images
 
 
@@ -1073,6 +1078,24 @@ def process_batch_targets(args):
         sys.exit(1)
 
     comparison_images = get_comparison_images(comparison_dir)
+    
+    # Show organization info in verbose mode
+    if args.verbose:
+        # Find unique subdirectories that contain images
+        subdirs = set()
+        for img_path in comparison_images:
+            relative_path = img_path.relative_to(comparison_dir)
+            if relative_path.parent != Path('.'):
+                subdirs.add(str(relative_path.parent))
+        
+        if subdirs:
+            print(f"📁 Found images in {len(subdirs)} subdirectories:")
+            for subdir in sorted(subdirs):
+                subdir_images = [img for img in comparison_images 
+                               if str(img.relative_to(comparison_dir)).startswith(subdir)]
+                print(f"   📂 {subdir}: {len(subdir_images)} images")
+        else:
+            print("📁 All comparison images are in the root directory")
 
     print(f"\n🎬 BATCH PROCESSING MODE")
     print(f"📁 Processing {len(target_images)} target frames")
@@ -1136,7 +1159,17 @@ def process_batch_targets(args):
         )
 
     # Batch process cached images (should be very fast)
-    for i, img_path in enumerate(cached_paths, 1):
+    if args.verbose:
+        cached_iterator = enumerate(cached_paths, 1)
+    else:
+        cached_iterator = enumerate(
+            tqdm(
+                cached_paths, desc="💾 Loading cached poses", unit="pose", leave=False
+            ),
+            1,
+        )
+
+    for i, img_path in cached_iterator:
         if args.verbose and i % 2000 == 0:  # Less frequent for cached items
             elapsed = time.time() - start_time
             rate = i / elapsed if elapsed > 0 else 0
@@ -1160,7 +1193,17 @@ def process_batch_targets(args):
             }
 
     # Process uncached images (slower but necessary)
-    for i, img_path in enumerate(uncached_paths, 1):
+    if args.verbose:
+        uncached_iterator = enumerate(uncached_paths, 1)
+    else:
+        uncached_iterator = enumerate(
+            tqdm(
+                uncached_paths, desc="🔍 Extracting new poses", unit="pose", leave=False
+            ),
+            1,
+        )
+
+    for i, img_path in uncached_iterator:
         if args.verbose:
             print(f"   Extracting {i}/{len(uncached_paths)}: {img_path.name}")
 
@@ -1220,24 +1263,27 @@ def process_batch_targets(args):
     failed_frames = 0
 
     # Process each target image
-    for frame_idx, target_image_path in enumerate(target_images, 1):
-        # Progress indicator - different behavior for verbose vs non-verbose
+    if args.verbose:
+        # Verbose mode: show detailed progress for each frame
+        frame_iterator = enumerate(target_images, 1)
+    else:
+        # Non-verbose mode: show progress bar
+        frame_iterator = enumerate(
+            tqdm(
+                target_images,
+                desc="🎞️ Processing frames",
+                unit="frame",
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
+            ),
+            1,
+        )
+
+    for frame_idx, target_image_path in frame_iterator:
+        # Progress indicator for verbose mode only
         if args.verbose:
             print(
                 f"\n🎞️ Processing frame {frame_idx:04d}/{len(target_images):04d}: {Path(target_image_path).name}"
             )
-        else:
-            # Simple progress meter for non-verbose mode
-            if frame_idx == 1:
-                print(
-                    f"\n🎞️ Processing {len(target_images)} frames: ", end="", flush=True
-                )
-
-            # Show progress dots/indicators
-            if frame_idx % 50 == 0:
-                print(f"{frame_idx}", end="", flush=True)
-            elif frame_idx % 10 == 0:
-                print(".", end="", flush=True)
 
         try:
             target_image, target_pose, results, target_time = (
@@ -1257,8 +1303,6 @@ def process_batch_targets(args):
                     print(
                         f"📷 Frame {frame_idx:04d}: No pose/matches found, using original frame"
                     )
-                elif frame_idx % 50 == 0:
-                    print("o", end="", flush=True)  # Show 'o' for original frames
 
                 # Create output with original frame
                 if args.layer_poses:
