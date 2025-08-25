@@ -644,10 +644,7 @@ def check_ffmpeg_available() -> bool:
     """Check if ffmpeg is available on the system."""
     try:
         result = subprocess.run(
-            ["ffmpeg", "-version"], 
-            capture_output=True, 
-            text=True, 
-            timeout=10
+            ["ffmpeg", "-version"], capture_output=True, text=True, timeout=10
         )
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -655,62 +652,56 @@ def check_ffmpeg_available() -> bool:
 
 
 def extract_frames_from_video(
-    video_path: str, 
-    output_dir: str, 
-    fps: Optional[float] = None,
-    verbose: bool = False
+    video_path: str, output_dir: str, fps: Optional[float] = None, verbose: bool = False
 ) -> Tuple[bool, int]:
     """
     Extract frames from video using ffmpeg.
-    
+
     Args:
         video_path: Path to input video file
         output_dir: Directory to save extracted frames
         fps: Frame rate to extract (None = use video's native fps)
         verbose: Enable verbose output
-        
+
     Returns:
         Tuple of (success, frame_count)
     """
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    
+
     # Build ffmpeg command
     cmd = ["ffmpeg", "-y", "-i", video_path]
-    
+
     if fps is not None:
         cmd.extend(["-vf", f"fps={fps}"])
-    
+
     frame_pattern = str(output_path / "frame_%04d.jpg")
     cmd.append(frame_pattern)
-    
+
     if verbose:
         print(f"🎬 Extracting frames from video: {Path(video_path).name}")
         print(f"📁 Output directory: {output_path}")
         if fps:
             print(f"🎯 Target FPS: {fps}")
-    
+
     try:
         result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=300  # 5 minute timeout
+            cmd, capture_output=True, text=True, timeout=300  # 5 minute timeout
         )
-        
+
         if result.returncode != 0:
             print(f"❌ FFmpeg error: {result.stderr}")
             return False, 0
-        
+
         # Count extracted frames
         frame_files = list(output_path.glob("frame_*.jpg"))
         frame_count = len(frame_files)
-        
+
         if verbose:
             print(f"✅ Extracted {frame_count} frames successfully")
-        
+
         return True, frame_count
-        
+
     except subprocess.TimeoutExpired:
         print("❌ Video extraction timed out (>5 minutes)")
         return False, 0
@@ -724,48 +715,48 @@ def create_video_from_frames(
     output_video: str,
     fps: float = 30.0,
     frame_pattern: str = "frame_%04d_*.png",
-    verbose: bool = False
+    verbose: bool = False,
 ) -> bool:
     """
     Create video from processed frames using ffmpeg.
-    
+
     Args:
         frames_dir: Directory containing processed frame images
         output_video: Path for output video file
         fps: Frame rate for output video
         frame_pattern: Pattern to match frame files
         verbose: Enable verbose output
-        
+
     Returns:
         True if successful, False otherwise
     """
     frames_path = Path(frames_dir)
-    
+
     if not frames_path.exists():
         print(f"❌ Frames directory not found: {frames_dir}")
         return False
-    
+
     # Get all frame files and sort them numerically
     frame_files = list(frames_path.glob("frame_*.png"))
     if not frame_files:
         print(f"❌ No frame files found in {frames_dir}")
         return False
-    
+
     # Sort by frame number extracted from filename
     def get_frame_number(filename):
         # Extract frame number from "frame_XXXX_something.png"
         try:
-            parts = filename.stem.split('_')
+            parts = filename.stem.split("_")
             return int(parts[1])  # frame_0001_something -> 0001
         except (IndexError, ValueError):
             return 0
-    
+
     frame_files.sort(key=get_frame_number)
-    
+
     # Create a temporary directory with sequential frame names for FFmpeg
     temp_frames_dir = frames_path / "temp_sequential"
     temp_frames_dir.mkdir(exist_ok=True)
-    
+
     try:
         # Create symbolic links with sequential names
         for i, frame_file in enumerate(frame_files, 1):
@@ -773,54 +764,60 @@ def create_video_from_frames(
             if temp_link.exists():
                 temp_link.unlink()
             temp_link.symlink_to(frame_file.resolve())
-        
+
         # Build ffmpeg command with sequential pattern
         input_pattern = str(temp_frames_dir / "frame_%04d.png")
         cmd = [
-            "ffmpeg", "-y",
-            "-framerate", str(fps),
-            "-i", input_pattern,
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-            "-crf", "18",  # High quality
-            output_video
+            "ffmpeg",
+            "-y",
+            "-framerate",
+            str(fps),
+            "-i",
+            input_pattern,
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-crf",
+            "18",  # High quality
+            output_video,
         ]
-        
+
         if verbose:
             print(f"🎬 Creating video from {len(frame_files)} frames")
             print(f"📁 Input pattern: {input_pattern}")
             print(f"📤 Output video: {output_video}")
             print(f"🎯 FPS: {fps}")
-        
+
         result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600  # 10 minute timeout
+            cmd, capture_output=True, text=True, timeout=600  # 10 minute timeout
         )
-        
+
         # Cleanup temporary directory
         import shutil
+
         shutil.rmtree(temp_frames_dir, ignore_errors=True)
-        
+
         if result.returncode != 0:
             print(f"❌ FFmpeg error creating video: {result.stderr}")
             return False
-        
+
         if verbose:
             print(f"✅ Video created successfully: {output_video}")
-        
+
         return True
-        
+
     except subprocess.TimeoutExpired:
         # Cleanup on timeout
         import shutil
+
         shutil.rmtree(temp_frames_dir, ignore_errors=True)
         print("❌ Video creation timed out (>10 minutes)")
         return False
     except Exception as e:
         # Cleanup on error
         import shutil
+
         shutil.rmtree(temp_frames_dir, ignore_errors=True)
         print(f"❌ Error creating video: {e}")
         return False
@@ -829,34 +826,34 @@ def create_video_from_frames(
 def cleanup_temporary_frames(frames_dir: str, verbose: bool = False) -> bool:
     """
     Clean up temporary frame files.
-    
+
     Args:
         frames_dir: Directory containing temporary frames
         verbose: Enable verbose output
-        
+
     Returns:
         True if successful, False otherwise
     """
     frames_path = Path(frames_dir)
-    
+
     if not frames_path.exists():
         return True  # Already clean
-    
+
     try:
         # Only remove frame files, not the entire directory
         frame_patterns = ["frame_*.jpg", "frame_*.png"]
         removed_count = 0
-        
+
         for pattern in frame_patterns:
             for frame_file in frames_path.glob(pattern):
                 frame_file.unlink()
                 removed_count += 1
-        
+
         if verbose and removed_count > 0:
             print(f"🧹 Cleaned up {removed_count} temporary frame files")
-        
+
         return True
-        
+
     except Exception as e:
         print(f"⚠️  Warning: Failed to cleanup frames: {e}")
         return False
@@ -910,7 +907,12 @@ def process_single_target(
 
 
 def process_single_target_fast(
-    target_image_path, estimator, matcher, comparison_poses_data, args, frame_number=None
+    target_image_path,
+    estimator,
+    matcher,
+    comparison_poses_data,
+    args,
+    frame_number=None,
 ):
     """Process a single target image using pre-loaded comparison poses."""
     if args.verbose:
@@ -940,24 +942,26 @@ def process_single_target_fast(
 
     # Fast comparison using pre-loaded poses
     if args.verbose:
-        print(f"🔄 Matching against {len(comparison_poses_data)} pre-loaded comparison poses...")
-    
+        print(
+            f"🔄 Matching against {len(comparison_poses_data)} pre-loaded comparison poses..."
+        )
+
     results = []
     start_time = time.time()
-    
+
     for img_path, pose_data in comparison_poses_data.items():
-        comparison_poses = pose_data['poses']
-        
+        comparison_poses = pose_data["poses"]
+
         if comparison_poses:
             best_match = matcher.find_best_match(
                 target_pose, comparison_poses, args.relative_visibility_threshold
             )
-            
+
             if best_match:
                 results.append(best_match)
-    
+
     match_time = time.time() - start_time
-    
+
     if args.verbose:
         print(f"Pose matching took: {match_time:.2f} seconds")
 
@@ -965,9 +969,6 @@ def process_single_target_fast(
     results.sort(key=lambda x: x.similarity_score, reverse=True)
 
     return target_image, target_pose, results, target_time
-
-
-
 
 
 def process_video_workflow(args):
@@ -980,17 +981,17 @@ def process_video_workflow(args):
         print("   Ubuntu: sudo apt install ffmpeg")
         print("   Windows: Download from https://ffmpeg.org/")
         sys.exit(1)
-    
+
     # Validate video input
     video_input = Path(args.video_input)
     if not video_input.exists():
         print(f"❌ Error: Video input file not found: {args.video_input}")
         sys.exit(1)
-    
+
     # Setup temporary frame directory
     temp_frames_dir = Path("data/input_frames")
     temp_frames_dir.mkdir(parents=True, exist_ok=True)
-    
+
     print(f"\n🎬 VIDEO PROCESSING WORKFLOW")
     print(f"📹 Input video: {video_input.name}")
     print(f"📁 Comparison images: {args.comparison_dir}")
@@ -998,64 +999,67 @@ def process_video_workflow(args):
         print(f"📤 Output video: {args.video_output}")
     print(f"🎯 FPS: {args.fps}")
     print("=" * 50)
-    
+
     try:
         # Step 1: Extract frames from video
         success, frame_count = extract_frames_from_video(
             str(video_input),
             str(temp_frames_dir),
-            fps=args.fps if args.fps != 30.0 else None,  # Use video's native fps if default
-            verbose=args.verbose
+            fps=(
+                args.fps if args.fps != 30.0 else None
+            ),  # Use video's native fps if default
+            verbose=args.verbose,
         )
-        
+
         if not success or frame_count == 0:
             print("❌ Failed to extract frames from video")
             sys.exit(1)
-        
+
         # Step 2: Set up arguments for batch processing
         # Temporarily override target to use extracted frames
         original_target = args.target
         args.target = str(temp_frames_dir)
         args.batch_process = True
         args.layer_poses = True
-        
+
         # Step 3: Process frames with pose matching
         print(f"\n🎞️ Processing {frame_count} extracted frames...")
         process_batch_targets(args)
-        
+
         # Step 4: Create output video if requested
         if args.video_output:
             layer_output_dir = Path(args.output_dir) / "batch_layered_poses"
-            
+
             success = create_video_from_frames(
                 str(layer_output_dir),
                 args.video_output,
                 fps=args.fps,
                 frame_pattern="frame_%04d_*.png",
-                verbose=args.verbose
+                verbose=args.verbose,
             )
-            
+
             if success:
                 print(f"\n🎉 Video processing complete!")
                 print(f"📹 Output video: {args.video_output}")
             else:
                 print(f"\n⚠️  Frame processing completed but video creation failed")
                 print(f"📁 Processed frames available in: {layer_output_dir}")
-        
+
         # Step 5: Cleanup temporary frames if requested
         if args.cleanup_frames:
             cleanup_temporary_frames(str(temp_frames_dir), args.verbose)
         else:
             print(f"\n💾 Extracted frames saved in: {temp_frames_dir}")
             print(f"   Use --cleanup-frames to auto-delete these files")
-        
+
         # Restore original target
         args.target = original_target
-        
+
     except Exception as e:
         print(f"❌ Error in video processing workflow: {e}")
         if args.verbose:
             import traceback
+
             traceback.print_exc()
         sys.exit(1)
 
@@ -1102,41 +1106,43 @@ def process_batch_targets(args):
     # Pre-load all comparison poses efficiently using cache
     if args.verbose:
         print(f"\n📋 Loading poses from {len(comparison_images)} comparison images...")
-    
+        print(f"💾 Cache database contains {len(estimator.cache.cache) if estimator.cache else 0} cached images")
+
     comparison_poses_data = {}
     cache_hits = 0
     cache_misses = 0
-    
+    start_time = time.time()
+
     for i, img_path in enumerate(comparison_images, 1):
-        if args.verbose and i % 100 == 0:
-            print(f"   Loading {i}/{len(comparison_images)} comparison poses...")
-        
+        if args.verbose and i % 500 == 0:  # Less frequent updates for speed
+            elapsed = time.time() - start_time
+            rate = i / elapsed if elapsed > 0 else 0
+            print(f"   Loading {i}/{len(comparison_images)} comparison poses... ({rate:.0f}/sec)")
+
         try:
-            img_array = load_image(str(img_path))
-            # This will use cache if available, or extract and cache if not
-            poses = estimator.extract_poses(img_array, str(img_path))
-            comparison_poses_data[str(img_path)] = {
-                'poses': poses,
-                'image': img_array
-            }
-            
-            # Check if this was a cache hit
+            # Check if this will be a cache hit first (without loading image)
             if estimator.cache and estimator.cache.is_cached(str(img_path)):
+                # Cache hit - get poses without loading full image
+                poses = estimator.cache.get_cached_poses(str(img_path))
+                comparison_poses_data[str(img_path)] = {"poses": poses, "image_path": str(img_path)}
                 cache_hits += 1
             else:
+                # Cache miss - need to load image and extract poses
+                img_array = load_image(str(img_path))
+                poses = estimator.extract_poses(img_array, str(img_path))
+                comparison_poses_data[str(img_path)] = {"poses": poses, "image_path": str(img_path)}
                 cache_misses += 1
-                
+
         except Exception as e:
             if args.verbose:
                 print(f"   Warning: Failed to load poses from {img_path.name}: {e}")
-            comparison_poses_data[str(img_path)] = {
-                'poses': [],
-                'image': None
-            }
-    
+            comparison_poses_data[str(img_path)] = {"poses": [], "image_path": str(img_path)}
+
     if args.verbose:
-        total_poses = sum(len(data['poses']) for data in comparison_poses_data.values())
-        print(f"✅ Loaded {total_poses} poses from {len(comparison_images)} images")
+        total_poses = sum(len(data["poses"]) for data in comparison_poses_data.values())
+        elapsed = time.time() - start_time
+        rate = len(comparison_images) / elapsed if elapsed > 0 else 0
+        print(f"✅ Loaded {total_poses} poses from {len(comparison_images)} images in {elapsed:.1f}s ({rate:.0f}/sec)")
         print(f"📊 Cache stats: {cache_hits} hits, {cache_misses} misses")
 
     matcher = PoseMatcher()
@@ -1157,13 +1163,15 @@ def process_batch_targets(args):
         )
 
         try:
-            target_image, target_pose, results, target_time = process_single_target_fast(
-                target_image_path,
-                estimator,
-                matcher,
-                comparison_poses_data,  # Use pre-loaded poses data
-                args,
-                frame_idx,
+            target_image, target_pose, results, target_time = (
+                process_single_target_fast(
+                    target_image_path,
+                    estimator,
+                    matcher,
+                    comparison_poses_data,  # Use pre-loaded poses data
+                    args,
+                    frame_idx,
+                )
             )
 
             if target_pose is None or not results:
@@ -1180,9 +1188,15 @@ def process_batch_targets(args):
                 comp_pose = None
 
                 pose_data = comparison_poses_data.get(best_result.comparison_image)
-                if pose_data and pose_data['image'] is not None and pose_data['poses']:
-                    comp_img = pose_data['image']
-                    
+                if pose_data and pose_data["poses"]:
+                    # Load image on-demand for layered visualization
+                    try:
+                        comp_img = load_image(pose_data["image_path"])
+                    except Exception as e:
+                        if args.verbose:
+                            print(f"Warning: Failed to load comparison image: {e}")
+                        continue
+
                     # Find the specific pose that gave this result
                     if (
                         hasattr(best_result, "comparison_pose")
@@ -1191,7 +1205,9 @@ def process_batch_targets(args):
                         comp_pose = best_result.comparison_pose
                     else:
                         # Fallback to highest confidence pose
-                        comp_pose = max(pose_data['poses'], key=lambda p: p.confidence_score)
+                        comp_pose = max(
+                            pose_data["poses"], key=lambda p: p.confidence_score
+                        )
 
                 if comp_pose and comp_img is not None:
                     # Create sequential frame output name
