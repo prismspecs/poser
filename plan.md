@@ -110,12 +110,24 @@ class SimilarityResult:
   - Provides progress tracking and timing statistics
   - Includes FFmpeg command suggestion for video creation
 
+### Video Processing
+- `--video-input`: Input video file path for automatic video processing workflow
+- `--video-output`: Output video file path for automatic video creation
+- `--fps`: Frame rate for video input/output (default: 30.0)
+- `--cleanup-frames`: Delete temporary frame files after video processing
+  - Automatically extracts frames from input video
+  - Processes frames with pose matching
+  - Creates output video from processed frames
+  - Supports all major video formats (MP4, AVI, MOV, etc.)
+  - Requires FFmpeg installation
+
 ## Dependencies
 - ultralytics (YOLO v11)
 - opencv-python
 - numpy
 - pillow
 - torch (PyTorch backend)
+- FFmpeg (for video processing)
 
 ## Usage Examples
 ```bash
@@ -136,9 +148,23 @@ python3 main.py --target data/input_frames/ --comparison-dir data/comparison_ima
 
 # Batch process with custom output directory
 python3 main.py --target data/input_frames/ --comparison-dir data/comparison_images --batch-process --output-dir results_custom
+
+# Process video directly (automatic workflow)
+python3 main.py --video-input input_video.mp4 --comparison-dir data/comparison_images --video-output output_video.mp4 --verbose
+
+# Process video with custom frame rate
+python3 main.py --video-input input_video.mp4 --comparison-dir data/comparison_images --video-output output_video.mp4 --fps 24 --cleanup-frames
 ```
 
-## Video Frame Processing Workflow
+## Video Processing Workflows
+
+### Automatic Video Workflow (Recommended)
+```bash
+# One-command video processing with automatic cleanup
+python3 main.py --video-input input_video.mp4 --comparison-dir data/comparison_images --video-output output_video.mp4 --cleanup-frames --verbose
+```
+
+### Manual Video Frame Processing Workflow
 ```bash
 # 1. Extract frames from video (if needed)
 ffmpeg -i input_video.mp4 -vf fps=30 data/input_frames/frame_%04d.jpg
@@ -149,3 +175,11 @@ python3 main.py --target data/input_frames/ --comparison-dir data/comparison_ima
 # 3. Create output video from processed frames
 ffmpeg -framerate 30 -i results/batch_layered_poses/frame_%04d_*.png -c:v libx264 -pix_fmt yuv420p output_video.mp4
 ```
+
+### Video Processing Features
+- **Automatic frame extraction** from any video format
+- **Efficient batch processing** with pose caching
+- **High-quality video output** (H.264, yuv420p)
+- **Customizable frame rates** for input/output
+- **Automatic cleanup** of temporary files
+- **Progress tracking** throughout the workflow

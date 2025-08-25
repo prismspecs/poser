@@ -9,8 +9,10 @@ import json
 import sys
 import random
 import time
+import subprocess
+import shutil
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
@@ -87,6 +89,25 @@ def parse_arguments():
         "--batch-process",
         action="store_true",
         help="Process all images in target directory sequentially for video frame processing",
+    )
+    parser.add_argument(
+        "--video-input",
+        help="Input video file path (automatically extracts frames for processing)",
+    )
+    parser.add_argument(
+        "--video-output",
+        help="Output video file path (automatically combines processed frames into video)",
+    )
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=30.0,
+        help="Frame rate for video input/output (default: 30.0)",
+    )
+    parser.add_argument(
+        "--cleanup-frames",
+        action="store_true",
+        help="Delete temporary frame files after video processing (default: keep frames)",
     )
 
     parser.add_argument(
@@ -620,6 +641,196 @@ def get_pose_scale(pose):
     return max_dist
 
 
+def check_ffmpeg_available() -> bool:
+    """Check if ffmpeg is available on the system."""
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-version"], 
+            capture_output=True, 
+            text=True, 
+            timeout=10
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+def extract_frames_from_video(
+    video_path: str, 
+    output_dir: str, 
+    fps: Optional[float] = None,
+    verbose: bool = False
+) -> Tuple[bool, int]:
+    """
+    Extract frames from video using ffmpeg.
+    
+    Args:
+        video_path: Path to input video file
+        output_dir: Directory to save extracted frames
+        fps: Frame rate to extract (None = use video's native fps)
+        verbose: Enable verbose output
+        
+    Returns:
+        Tuple of (success, frame_count)
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    # Build ffmpeg command
+    cmd = ["ffmpeg", "-y", "-i", video_path]
+    
+    if fps is not None:
+        cmd.extend(["-vf", f"fps={fps}"])
+    
+    frame_pattern = str(output_path / "frame_%04d.jpg")
+    cmd.append(frame_pattern)
+    
+    if verbose:
+        print(f"🎬 Extracting frames from video: {Path(video_path).name}")
+        print(f"📁 Output directory: {output_path}")
+        if fps:
+            print(f"🎯 Target FPS: {fps}")
+    
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minute timeout
+        )
+        
+        if result.returncode != 0:
+            print(f"❌ FFmpeg error: {result.stderr}")
+            return False, 0
+        
+        # Count extracted frames
+        frame_files = list(output_path.glob("frame_*.jpg"))
+        frame_count = len(frame_files)
+        
+        if verbose:
+            print(f"✅ Extracted {frame_count} frames successfully")
+        
+        return True, frame_count
+        
+    except subprocess.TimeoutExpired:
+        print("❌ Video extraction timed out (>5 minutes)")
+        return False, 0
+    except Exception as e:
+        print(f"❌ Error extracting frames: {e}")
+        return False, 0
+
+
+def create_video_from_frames(
+    frames_dir: str,
+    output_video: str,
+    fps: float = 30.0,
+    frame_pattern: str = "frame_%04d_*.png",
+    verbose: bool = False
+) -> bool:
+    """
+    Create video from processed frames using ffmpeg.
+    
+    Args:
+        frames_dir: Directory containing processed frame images
+        output_video: Path for output video file
+        fps: Frame rate for output video
+        frame_pattern: Pattern to match frame files
+        verbose: Enable verbose output
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    frames_path = Path(frames_dir)
+    
+    if not frames_path.exists():
+        print(f"❌ Frames directory not found: {frames_dir}")
+        return False
+    
+    # Check if we have any frame files
+    frame_files = list(frames_path.glob(frame_pattern.replace("%04d", "*")))
+    if not frame_files:
+        print(f"❌ No frame files found matching pattern: {frame_pattern}")
+        return False
+    
+    # Build ffmpeg command for creating video
+    input_pattern = str(frames_path / frame_pattern)
+    cmd = [
+        "ffmpeg", "-y",
+        "-framerate", str(fps),
+        "-i", input_pattern,
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-crf", "18",  # High quality
+        output_video
+    ]
+    
+    if verbose:
+        print(f"🎬 Creating video from {len(frame_files)} frames")
+        print(f"📁 Input pattern: {input_pattern}")
+        print(f"📤 Output video: {output_video}")
+        print(f"🎯 FPS: {fps}")
+    
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600  # 10 minute timeout
+        )
+        
+        if result.returncode != 0:
+            print(f"❌ FFmpeg error creating video: {result.stderr}")
+            return False
+        
+        if verbose:
+            print(f"✅ Video created successfully: {output_video}")
+        
+        return True
+        
+    except subprocess.TimeoutExpired:
+        print("❌ Video creation timed out (>10 minutes)")
+        return False
+    except Exception as e:
+        print(f"❌ Error creating video: {e}")
+        return False
+
+
+def cleanup_temporary_frames(frames_dir: str, verbose: bool = False) -> bool:
+    """
+    Clean up temporary frame files.
+    
+    Args:
+        frames_dir: Directory containing temporary frames
+        verbose: Enable verbose output
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    frames_path = Path(frames_dir)
+    
+    if not frames_path.exists():
+        return True  # Already clean
+    
+    try:
+        # Only remove frame files, not the entire directory
+        frame_patterns = ["frame_*.jpg", "frame_*.png"]
+        removed_count = 0
+        
+        for pattern in frame_patterns:
+            for frame_file in frames_path.glob(pattern):
+                frame_file.unlink()
+                removed_count += 1
+        
+        if verbose and removed_count > 0:
+            print(f"🧹 Cleaned up {removed_count} temporary frame files")
+        
+        return True
+        
+    except Exception as e:
+        print(f"⚠️  Warning: Failed to cleanup frames: {e}")
+        return False
+
+
 def process_single_target(
     target_image_path, estimator, matcher, comparison_data, args, frame_number=None
 ):
@@ -754,6 +965,96 @@ def process_comparison_images_with_cache(
         0.0,
         total_pose_matching_time,
     )  # pose_extraction_time is 0 since pre-extracted
+
+
+def process_video_workflow(args):
+    """Process video input and output workflow."""
+    # Check ffmpeg availability
+    if not check_ffmpeg_available():
+        print("❌ Error: FFmpeg is required for video processing but not found.")
+        print("💡 Install FFmpeg: https://ffmpeg.org/download.html")
+        print("   macOS: brew install ffmpeg")
+        print("   Ubuntu: sudo apt install ffmpeg")
+        print("   Windows: Download from https://ffmpeg.org/")
+        sys.exit(1)
+    
+    # Validate video input
+    video_input = Path(args.video_input)
+    if not video_input.exists():
+        print(f"❌ Error: Video input file not found: {args.video_input}")
+        sys.exit(1)
+    
+    # Setup temporary frame directory
+    temp_frames_dir = Path("data/input_frames")
+    temp_frames_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"\n🎬 VIDEO PROCESSING WORKFLOW")
+    print(f"📹 Input video: {video_input.name}")
+    print(f"📁 Comparison images: {args.comparison_dir}")
+    if args.video_output:
+        print(f"📤 Output video: {args.video_output}")
+    print(f"🎯 FPS: {args.fps}")
+    print("=" * 50)
+    
+    try:
+        # Step 1: Extract frames from video
+        success, frame_count = extract_frames_from_video(
+            str(video_input),
+            str(temp_frames_dir),
+            fps=args.fps if args.fps != 30.0 else None,  # Use video's native fps if default
+            verbose=args.verbose
+        )
+        
+        if not success or frame_count == 0:
+            print("❌ Failed to extract frames from video")
+            sys.exit(1)
+        
+        # Step 2: Set up arguments for batch processing
+        # Temporarily override target to use extracted frames
+        original_target = args.target
+        args.target = str(temp_frames_dir)
+        args.batch_process = True
+        args.layer_poses = True
+        
+        # Step 3: Process frames with pose matching
+        print(f"\n🎞️ Processing {frame_count} extracted frames...")
+        process_batch_targets(args)
+        
+        # Step 4: Create output video if requested
+        if args.video_output:
+            layer_output_dir = Path(args.output_dir) / "batch_layered_poses"
+            
+            success = create_video_from_frames(
+                str(layer_output_dir),
+                args.video_output,
+                fps=args.fps,
+                frame_pattern="frame_%04d_*.png",
+                verbose=args.verbose
+            )
+            
+            if success:
+                print(f"\n🎉 Video processing complete!")
+                print(f"📹 Output video: {args.video_output}")
+            else:
+                print(f"\n⚠️  Frame processing completed but video creation failed")
+                print(f"📁 Processed frames available in: {layer_output_dir}")
+        
+        # Step 5: Cleanup temporary frames if requested
+        if args.cleanup_frames:
+            cleanup_temporary_frames(str(temp_frames_dir), args.verbose)
+        else:
+            print(f"\n💾 Extracted frames saved in: {temp_frames_dir}")
+            print(f"   Use --cleanup-frames to auto-delete these files")
+        
+        # Restore original target
+        args.target = original_target
+        
+    except Exception as e:
+        print(f"❌ Error in video processing workflow: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
 
 
 def process_batch_targets(args):
@@ -950,6 +1251,14 @@ def main():
     args = parse_arguments()
 
     try:
+        # Check if video processing mode is enabled
+        if args.video_input:
+            if not args.comparison_dir:
+                print("❌ Error: --comparison-dir is required for video processing")
+                sys.exit(1)
+            process_video_workflow(args)
+            return
+
         # Check if batch processing mode is enabled
         if args.batch_process:
             # Force layer poses for batch processing
