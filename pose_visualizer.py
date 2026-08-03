@@ -7,7 +7,7 @@ Creates diagnostic images showing detected poses, keypoints, and similarity scor
 import cv2
 import numpy as np
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Any
 
 from utils.pose_utils import PoseData, SimilarityResult
 
@@ -861,3 +861,90 @@ class PoseVisualizer:
         )
 
         return scaled_pose
+
+    def create_person_cutout_composite(
+        self,
+        target_image: np.ndarray,
+        target_pose: Optional[PoseData],
+        source_image: np.ndarray,
+        source_bbox: Tuple[float, float, float, float],
+        segmentation_model: Optional[Any] = None,
+    ) -> np.ndarray:
+        """
+        Segment the person from the source image and warp/composite them directly onto the target frame.
+
+        Args:
+            target_image: Background target frame array.
+            target_pose: Target frame pose data (for scale & location positioning).
+            source_image: Source film frame array containing matching person.
+            source_bbox: (x1, y1, x2, y2) bounding box of person in source_image.
+            segmentation_model: Optional YOLO segmentation model instance.
+
+        Returns:
+            Composite image with source person cutout layered over target.
+        """
+        # Ensure target image is in standard 1920x1080 HD container
+        target_canvas = self._resize_to_hd_with_padding(target_image.copy())
+        h_canvas, w_canvas = target_canvas.shape[:2]
+
+        # Extract segmentation mask for person in source_image
+        src_mask = np.zeros(source_image.shape[:2], dtype=np.uint8)
+        if segmentation_model is not None:
+            try:
+                results = segmentation_model(source_image, verbose=False)
+                for r in results:
+                    if r.masks is not None and len(r.masks) > 0:
+                        for i, cls_id in enumerate(r.boxes.cls):
+                            if int(cls_id) == 0:  # COCO class 0 = person
+                                m = (r.masks.data[i].cpu().numpy() * 255).astype(np.uint8)
+                                if m.shape != source_image.shape[:2]:
+                                    m = cv2.resize(m, (source_image.shape[1], source_image.shape[0]))
+                                src_mask = cv2.bitwise_or(src_mask, m)
+            except Exception:
+                pass
+
+        # Fallback mask using bounding box if segmentation mask is empty
+        if np.count_nonzero(src_mask) == 0:
+            x1, y1, x2, y2 = [int(v) for v in source_bbox]
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(source_image.shape[1], x2), min(source_image.shape[0], y2)
+            cv2.ellipse(
+                src_mask,
+                ((x1 + x2) // 2, (y1 + y2) // 2),
+                (max(10, (x2 - x1) // 2), max(10, (y2 - y1) // 2)),
+                0, 0, 360, 255, -1
+            )
+
+        # Target center and height
+        if target_pose is not None and target_pose.bounding_box:
+            t_h_orig, t_w_orig = target_image.shape[:2]
+            scale_hd = min(w_canvas / t_w_orig, h_canvas / t_h_orig)
+            x_off = (w_canvas - int(t_w_orig * scale_hd)) // 2
+            y_off = (h_canvas - int(t_h_orig * scale_hd)) // 2
+
+            t_bx1, t_by1, t_bx2, t_by2 = target_pose.bounding_box
+            t_cx = ((t_bx1 + t_bx2) / 2.0) * scale_hd + x_off
+            t_cy = ((t_by1 + t_by2) / 2.0) * scale_hd + y_off
+            t_h = max(30.0, (t_by2 - t_by1) * scale_hd)
+        else:
+            t_cx, t_cy, t_h = w_canvas / 2.0, h_canvas / 2.0, h_canvas * 0.6
+
+        # Source center and height
+        s_bx1, s_by1, s_bx2, s_by2 = source_bbox
+        s_cx = (s_bx1 + s_bx2) / 2.0
+        s_cy = (s_by1 + s_by2) / 2.0
+        s_h = max(30.0, s_by2 - s_by1)
+
+        scale = t_h / s_h
+        tx = t_cx - scale * s_cx
+        ty = t_cy - scale * s_cy
+
+        M = np.float32([[scale, 0, tx], [0, scale, ty]])
+
+        warped_src = cv2.warpAffine(source_image, M, (w_canvas, h_canvas))
+        warped_mask = cv2.warpAffine(src_mask, M, (w_canvas, h_canvas))
+
+        alpha = (warped_mask > 127).astype(np.float32)[:, :, None]
+        composite = (target_canvas.astype(np.float32) * (1.0 - alpha) + warped_src.astype(np.float32) * alpha).astype(np.uint8)
+
+        return composite

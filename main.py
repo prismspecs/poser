@@ -1640,28 +1640,28 @@ def handle_reconstruct(args):
                 else:
                     source_img = load_image(str(source_frame_path))
 
-                if source_img is not None and target_pose is not None:
-                    # Extract source pose from source image for accurate pixel-space alignment
-                    source_poses = estimator.extract_poses(source_img, str(out_frame_path))
-                    if source_poses:
-                        source_pose = max(source_poses, key=lambda p: p.confidence_score)
-                    else:
-                        win_kps = [(float(match["vector"][2*i]) * source_img.shape[1], float(match["vector"][2*i+1]) * source_img.shape[0], 0.9) if match["vector"][2*i] != 0 else None for i in range(17)]
-                        source_pose = PoseData(
-                            keypoints=win_kps,
-                            bounding_box=match["bbox"],
-                            confidence_score=match["confidence"],
-                            image_path=str(source_frame_path),
-                            pose_id=f"db_match_{match['pose_id']}"
-                        )
-
-                    comp_vis = visualizer.create_winning_pose_overlay(
-                        target_img,
-                        target_pose,
-                        source_pose,
-                        match["similarity_score"],
-                        winning_image=source_img
+                if source_img is not None:
+                    # Segment person from source video frame and composite directly onto target frame
+                    comp_vis = visualizer.create_person_cutout_composite(
+                        target_image=target_img,
+                        target_pose=target_pose,
+                        source_image=source_img,
+                        source_bbox=match["bbox"],
+                        segmentation_model=estimator.segmentation_model
                     )
+
+                    # Draw skeleton overlay if visualize argument is explicitly set
+                    if getattr(args, "visualize", False) and target_pose is not None:
+                        source_poses = estimator.extract_poses(source_img, str(out_frame_path))
+                        if source_poses:
+                            s_pose = max(source_poses, key=lambda p: p.confidence_score)
+                            comp_vis = visualizer.create_winning_pose_overlay(
+                                target_img,
+                                target_pose,
+                                s_pose,
+                                match["similarity_score"],
+                                winning_image=source_img
+                            )
             except Exception as e:
                 print(f"Warning rendering frame {idx+1}: {e}")
 
