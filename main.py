@@ -1647,7 +1647,13 @@ def handle_reconstruct(args):
                         source_pose = max(source_poses, key=lambda p: p.confidence_score)
                     else:
                         win_kps = [(float(match["vector"][2*i]) * source_img.shape[1], float(match["vector"][2*i+1]) * source_img.shape[0], 0.9) if match["vector"][2*i] != 0 else None for i in range(17)]
-                        source_pose = PoseData(keypoints=win_kps, bounding_box=match["bbox"], confidence_score=match["confidence"], image_path=str(source_frame_path))
+                        source_pose = PoseData(
+                            keypoints=win_kps,
+                            bounding_box=match["bbox"],
+                            confidence_score=match["confidence"],
+                            image_path=str(source_frame_path),
+                            pose_id=f"db_match_{match['pose_id']}"
+                        )
 
                     comp_vis = visualizer.create_winning_pose_overlay(
                         target_img,
