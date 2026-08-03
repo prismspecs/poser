@@ -1626,36 +1626,48 @@ def handle_reconstruct(args):
     visualizer = PoseVisualizer()
     print("Rendering composite video art frames...")
     
+    last_valid_vis = None
     for idx, (match, (target_fpath, target_img, target_pose)) in enumerate(zip(matches, target_poses)):
         out_frame_path = render_dir / f"frame_{idx+1:04d}.png"
         
+        comp_vis = None
         if match and match.get("film_path") and Path(match["film_path"]).exists():
             try:
-                # Load matching source frame
                 source_frame_path = Path(match["film_path"])
-                source_img = load_image(str(source_frame_path))
-                
-                if target_pose and source_img is not None:
-                    # Align and composite person overlay onto target frame
+                if source_frame_path.suffix.lower() in {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}:
+                    from utils.image_utils import extract_frame_from_video
+                    source_img = extract_frame_from_video(str(source_frame_path), match["frame_idx"])
+                else:
+                    source_img = load_image(str(source_frame_path))
+
+                if source_img is not None and target_pose is not None:
+                    # Extract source pose from source image for accurate pixel-space alignment
+                    source_poses = estimator.extract_poses(source_img, str(out_frame_path))
+                    if source_poses:
+                        source_pose = max(source_poses, key=lambda p: p.confidence_score)
+                    else:
+                        win_kps = [(float(match["vector"][2*i]) * source_img.shape[1], float(match["vector"][2*i+1]) * source_img.shape[0], 0.9) if match["vector"][2*i] != 0 else None for i in range(17)]
+                        source_pose = PoseData(keypoints=win_kps, bounding_box=match["bbox"], confidence_score=match["confidence"], image_path=str(source_frame_path))
+
                     comp_vis = visualizer.create_winning_pose_overlay(
                         target_img,
                         target_pose,
-                        PoseData(
-                            keypoints=[(float(match["vector"][2*i]), float(match["vector"][2*i+1]), 0.9) if match["vector"][2*i] != 0 else None for i in range(17)],
-                            bounding_box=match["bbox"],
-                            confidence_score=match["confidence"],
-                            image_path=str(source_frame_path),
-                            pose_id=f"db_match_{match['pose_id']}"
-                        ),
-                        match["similarity_score"]
+                        source_pose,
+                        match["similarity_score"],
+                        winning_image=source_img
                     )
-                    cv2.imwrite(str(out_frame_path), comp_vis)
-                else:
-                    cv2.imwrite(str(out_frame_path), source_img if source_img is not None else target_img)
             except Exception as e:
-                cv2.imwrite(str(out_frame_path), target_img)
-        else:
-            cv2.imwrite(str(out_frame_path), target_img)
+                print(f"Warning rendering frame {idx+1}: {e}")
+
+        if comp_vis is None:
+            if target_img is not None:
+                comp_vis = visualizer._resize_to_hd_with_padding(target_img)
+            elif last_valid_vis is not None:
+                comp_vis = last_valid_vis
+
+        if comp_vis is not None:
+            cv2.imwrite(str(out_frame_path), comp_vis)
+            last_valid_vis = comp_vis
 
     # Combine frames into output video
     print(f"Encoding output video: {args.output}")

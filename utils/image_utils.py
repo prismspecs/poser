@@ -68,6 +68,31 @@ def load_image(image_path: Union[str, Path]) -> np.ndarray:
         raise RuntimeError(f"Failed to load image {image_path}: {e}")
 
 
+def extract_frame_from_video(video_path: Union[str, Path], frame_idx: int) -> Optional[np.ndarray]:
+    """
+    Extract a specific frame from a video file by index.
+
+    Args:
+        video_path: Path to the video file.
+        frame_idx: 0-indexed frame index to extract.
+
+    Returns:
+        Frame image as BGR numpy array, or None if extraction fails.
+    """
+    video_path = str(Path(video_path))
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return None
+
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+    ret, frame = cap.read()
+    cap.release()
+
+    if ret and frame is not None:
+        return frame
+    return None
+
+
 def validate_image_path(image_path: Union[str, Path]) -> bool:
     """
     Validate if an image path is valid and accessible.

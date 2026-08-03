@@ -476,6 +476,7 @@ class PoseVisualizer:
         winning_pose: PoseData,
         similarity_score: float,
         output_path: Optional[str] = None,
+        winning_image: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
         Create an overlay showing the winning comparison pose skeleton on the target image.
@@ -486,6 +487,7 @@ class PoseVisualizer:
             winning_pose: Winning comparison pose data
             similarity_score: Similarity score between poses
             output_path: Optional path to save the overlay
+            winning_image: Optional pre-loaded image array for winning pose
 
         Returns:
             Overlay visualization image
@@ -519,12 +521,14 @@ class PoseVisualizer:
                 "skeleton": (255, 0, 0),  # Blue skeleton lines for winning pose
             }
 
-            # The winning pose coordinates are from its own image, not the target image
-            # We need to load the actual winning image to get the correct coordinate system
             try:
-                from utils.image_utils import load_image
+                if winning_image is None:
+                    from utils.image_utils import load_image
+                    winning_image = load_image(winning_pose.image_path)
+                
+                if winning_image is None:
+                    return target_vis
 
-                winning_image = load_image(winning_pose.image_path)
                 winning_h, winning_w = winning_image.shape[:2]
 
                 # The winning pose needs to be scaled to match the target image's HD transformation
