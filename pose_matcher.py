@@ -4,7 +4,7 @@ Handles pose similarity calculations and matching between target and comparison 
 """
 
 import numpy as np
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Any, Dict
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import StandardScaler
 
@@ -493,3 +493,108 @@ class PoseMatcher:
 
         # Both poses must meet the threshold
         return visibility1 >= min_threshold and visibility2 >= min_threshold
+
+    @staticmethod
+    def calculate_vector_mse(v1: np.ndarray, v2: np.ndarray) -> float:
+        """Calculate MSE between two 34D normalized keypoint vectors."""
+        # Non-zero mask for valid keypoints
+        mask = (v1 != 0) & (v2 != 0)
+        if np.sum(mask) < 12:  # Need at least 6 common keypoints (12 coords)
+            return float('inf')
+        return float(np.mean((v1[mask] - v2[mask]) ** 2))
+
+    def match_db_sequence(
+        self,
+        target_vectors: List[np.ndarray],
+        pose_db: Any,
+        mode: str = "diversity",
+        exclude_same_film: bool = True,
+        max_clip_reuse: int = 5,
+        cooldown: int = 5,
+        target_film_title: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Match a sequence of target pose vectors against the SQLite pose database.
+
+        Args:
+            target_vectors: List of 34D normalized pose vectors for target frames.
+            pose_db: PoseDatabase instance containing library poses.
+            mode: 'diversity' (switch films frequently) or 'smooth' (prefer temporal continuity).
+            exclude_same_film: If True, do not pick poses from target_film_title.
+            max_clip_reuse: Maximum number of frames pulled from any single film.
+            cooldown: Frames to wait before reusing a film in diversity mode.
+            target_film_title: Title of source film for target sequence (for exclusion).
+
+        Returns:
+            List of winning pose match dictionaries per frame.
+        """
+        all_poses = pose_db.get_all_poses()
+        if not all_poses:
+            print("Warning: Pose database is empty!")
+            return []
+
+        selected_matches = []
+        film_usage_count = {}
+        last_used_film = {}
+
+        for frame_idx, target_vec in enumerate(target_vectors):
+            if target_vec is None:
+                selected_matches.append(None)
+                continue
+
+            best_candidate = None
+            best_score = float('inf')
+
+            for candidate in all_poses:
+                film_title = candidate["film_title"]
+                film_id = candidate["film_id"]
+
+                # Exclude target film if requested
+                if exclude_same_film and target_film_title and film_title == target_film_title:
+                    continue
+
+                # Max clip reuse cap
+                if film_usage_count.get(film_title, 0) >= max_clip_reuse * 24: # allow up to max_clip_reuse seconds total
+                    continue
+
+                # Cooldown in diversity mode
+                if mode == "diversity" and film_title in last_used_film:
+                    frames_since = frame_idx - last_used_film[film_title]
+                    if frames_since < cooldown:
+                        continue
+
+                mse = self.calculate_vector_mse(target_vec, candidate["vector"])
+                if mse == float('inf'):
+                    continue
+
+                # In smooth mode, penalize switching away from current film if moving sequentially
+                penalty = 0.0
+                if mode == "smooth" and selected_matches and selected_matches[-1]:
+                    prev_match = selected_matches[-1]
+                    if prev_match["film_id"] == film_id:
+                        expected_frame = prev_match["frame_idx"] + 1
+                        if abs(candidate["frame_idx"] - expected_frame) <= 2:
+                            penalty = -0.05  # Reward sequential frame continuation
+
+                score = mse + penalty
+
+                if score < best_score:
+                    best_score = score
+                    best_candidate = candidate
+
+            if best_candidate:
+                film_title = best_candidate["film_title"]
+                film_usage_count[film_title] = film_usage_count.get(film_title, 0) + 1
+                last_used_film[film_title] = frame_idx
+                
+                # Convert MSE to similarity score (0 to 1)
+                sim_score = max(0.0, min(1.0, float(np.exp(-best_score / 0.2))))
+                match_info = dict(best_candidate)
+                match_info["similarity_score"] = sim_score
+                selected_matches.append(match_info)
+            else:
+                # Fallback to absolute best match regardless of cooldown if constrained
+                selected_matches.append(None)
+
+        return selected_matches
+

@@ -93,3 +93,12 @@ tmp/
 *.xml
 *.yaml
 *.yml
+*.db
+pose_library.db
+
+# Media files
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm

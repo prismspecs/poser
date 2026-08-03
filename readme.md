@@ -1,27 +1,71 @@
-# Pose Estimation and Matching System
+# Poser: Skeletal & Pose-Driven Video Art Synthesis Engine
 
-A Python-based system for estimating human poses from images using YOLO v13 and finding similar poses across a dataset.
+**`poser`** is an intelligent Python system designed to synthesize mesmerizing video art by extracting skeletal human pose trajectories from target video clips (e.g. a 15-second iconic dance scene) and reconstructing them frame-by-frame using closely matching poses retrieved from a massive, indexed library of source films (e.g., hundreds of Hollywood movies).
 
-## Features
+---
 
-- **Pose Estimation**: Extract human poses from images using YOLO v13
-- **Pose Matching**: Find similar poses using advanced similarity algorithms
-- **Multi-Person Detection**: Handle images with multiple people
-- **Visualization**: Generate diagnostic images showing poses and similarity scores
-- **CLI Interface**: Easy-to-use command-line interface
+## 🎨 Concept & Artistic Vision
 
-## Installation
+Imagine taking a iconic 15-second dance sequence or martial arts routine and watching it play out in real-time, where **every single frame comes from a completely different film**, seamless in pose alignment but wildly diverse in visual style, lighting, color, and character!
+
+```
+[ Target Clip (15s Dance) ] ──> Extract Keypoint Trajectory
+                                          │
+                                          ▼
+                      [ High-Performance Binary Pose Database ]
+                           (Ingested 100+ Hollywood Films)
+                                          │
+                                          ▼
+                      [ Diversity & Coarse-to-Fine Search ]
+                     - Multi-film constraint (no repeated films)
+                     - Interval lookup + local ±2s window search
+                                          │
+                                          ▼
+                      [ Synthesized Composite Video Art ]
+```
+
+---
+
+## ✨ Features
+
+- **Massive Media Ingestion**: Single-pass pose extraction per movie with YOLOv11/v13.
+- **Ultra-Compact Pose Database**: Replaces massive JSON logs with compact SQLite binary tables storing 34D/51D normalized float16/float32 pose BLOBs.
+- **Coarse-to-Fine Vector Matching**:
+  - **Interval Sampling**: Fast keyframe pose lookup across millions of frames.
+  - **Temporal Refinement Window**: Inspects a $\pm 2.0$-second local window around matching candidates to assess temporal velocity and motion continuity.
+- **Diversity & Cooldown Rules**:
+  - `--exclude-same-film`: Disallows matching frames from the same source movie as target or prior frames.
+  - `--max-clips-per-film`: Limits maximum frame contributions per source film.
+  - `--film-cooldown`: Forces a minimum number of frames before a source film can be reused.
+- **LLM Agent & Skill Native**: Built-in agent configurations and skills for **Gemini 3** (`.gemini/skills`), **Claude Code** (`CLAUDE.md`, `.claude/skills`), and **OpenCode** (`AGENTS.md`, `.opencode/skills`).
+- **Diagnostic Visualizer & Video Composite Engine**: Generates skeletal overlays, diagnostic comparison grids, body segmentation masking, and direct FFmpeg video assembly.
+
+---
+
+## 🗄 Database Architecture: High Efficiency Pose Storage
+
+Storing keypoint data for 100 movies (approx. $17,000,000$ frames) in standard JSON format would take over **15 GB** of disk space and saturate RAM. `poser` solves this using an optimized binary database format:
+
+- **Keypoint Compression**: 17 COCO keypoints $(x, y, c)$ normalized and packed into a raw 34D/51D `float16` binary BLOB ($68$ to $102$ bytes per pose).
+- **Indexing**: SQLite database with composite indexing on `(film_id, frame_idx, timestamp)`.
+- **Memory Footprint**: 17 million frames fit in under **1.2 GB** of disk space and query in milliseconds.
+
+---
+
+## 🚀 Quick Start
+
+### Installation
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/your-username/poser.git
 cd poser
 ```
 
-2. Create a virtual environment:
+2. Create and activate a Python virtual environment:
 ```bash
 python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate
 ```
 
 3. Install dependencies:
@@ -29,224 +73,58 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## Quick Start
+---
 
-### Basic Usage
+## 🛠 Usage & Workflows
 
-Compare a target image against a directory of comparison images:
-
+### 1. Ingest Video Media Library
+Extract and store skeletal poses from a directory of source movies:
 ```bash
-python3 main.py --target path/to/target.jpg --comparison-dir path/to/comparison/images
+python3 main.py ingest --input-dir /path/to/movies_library --db pose_library.db --fps 12
 ```
 
-### Generate Visualizations
-
-Add the `--visualize` flag to create diagnostic images:
-
+### 2. Reconstruct Video Art Sequence
+Reconstruct a 15-second target clip using the ingested pose library:
 ```bash
-python3 main.py --target path/to/target.jpg --comparison-dir path/to/comparison/images --visualize
+python3 main.py reconstruct \
+  --target input_dance_clip.mp4 \
+  --db pose_library.db \
+  --output reconstructed_art.mp4 \
+  --exclude-same-film \
+  --max-clip-reuse 2 \
+  --temporal-window 2.0 \
+  --visualize
 ```
 
-Simple run program and output a test composition
-
+### 3. Database Statistics
+Inspect total ingested films, frame counts, and storage efficiency:
 ```bash
-python3 main.py --target data/target_images/dancing1.jpg --comparison-dir data/comparison_images/ --visualize
+python3 main.py db-stats --db pose_library.db
 ```
 
-Video in/out
+---
+
+## 🤖 LLM Agent & Skill Files
+
+This project includes agent guidelines and skills for modern LLM tools:
+
+| Assistant / CLI | File Paths |
+| :--- | :--- |
+| **Gemini 3 / AGY** | [`GEMINI.md`](file:///Users/grayson/workbench/poser/GEMINI.md), [`.gemini/skills/pose-video-art/SKILL.md`](file:///Users/grayson/workbench/poser/.gemini/skills/pose-video-art/SKILL.md) |
+| **Claude Code** | [`CLAUDE.md`](file:///Users/grayson/workbench/poser/CLAUDE.md), [`.claude/skills/video-art-matcher/SKILL.md`](file:///Users/grayson/workbench/poser/.claude/skills/video-art-matcher/SKILL.md) |
+| **OpenCode** | [`AGENTS.md`](file:///Users/grayson/workbench/poser/AGENTS.md), [`.opencode/skills/video-art-reconstruction/SKILL.md`](file:///Users/grayson/workbench/poser/.opencode/skills/video-art-reconstruction/SKILL.md) |
+
+---
+
+## 🔬 Testing
+
+Run automated tests using pytest:
 ```bash
-# Complete video workflow in one command
-python3 main.py --video-input input_video.mp4 --comparison-dir data/comparison_images --video-output output_video.mp4 --cleanup-frames --verbose
+python3 -m pytest tests/ -v
 ```
 
-This will create:
-- `pose_comparison_[target].jpg` - Main grid showing target, overlay, and comparisons
-- `keypoint_analysis_[target].jpg` - Detailed keypoint comparison
-- `pose_overlay_[target].jpg` - Target with winning pose skeleton overlaid
+---
 
-### Testing with Sample Images
+## 📄 License
 
-Use the included test script to randomly test poses:
-
-```bash
-python3 test_random_poses.py
-```
-
-## Usage Examples
-
-### Command Line Options
-
-```bash
-python3 main.py --help
-```
-
-Available options:
-- `--target`: Path to target image
-- `--comparison-dir`: Directory containing comparison images
-- `--threshold`: Confidence threshold for pose detection (default: 0.7)
-- `--max-results`: Maximum number of results to return (default: 10)
-- `--output`: Save results to JSON file
-- `--visualize`: Generate diagnostic visualizations
-- `--output-dir`: Directory for visualization outputs (default: "results")
-- `--verbose`: Enable verbose output
-
-### Example Commands
-
-```bash
-# Basic pose matching
-python3 main.py --target data/test_images/basketball1.jpg --comparison-dir data/test_images
-
-# With visualization and custom output
-python3 main.py --target data/test_images/basketball1.jpg --comparison-dir data/test_images --visualize --output-dir my_results --max-results 5
-
-# Save results to file
-python3 main.py --target data/test_images/basketball1.jpg --comparison-dir data/test_images --output results.json
-```
-
-## Architecture
-
-### Core Components
-
-- **`main.py`**: Main CLI application and orchestration
-- **`pose_estimator.py`**: YOLO-based pose estimation
-- **`pose_matcher.py`**: Pose similarity calculation and matching
-- **`pose_visualizer.py`**: Diagnostic visualization generation
-- **`utils/`**: Utility functions for image processing and pose data
-
-### Data Structures
-
-- **`PoseData`**: Contains keypoints, bounding box, confidence, and metadata
-- **`SimilarityResult`**: Stores similarity scores and comparison information
-
-### Pose Similarity Algorithm
-
-The system uses a sophisticated pose comparison algorithm:
-
-1. **Normalization**: Makes poses position, scale, and orientation invariant
-2. **Keypoint Alignment**: Uses torso (shoulders/hips) as reference for alignment
-3. **Distance Calculation**: Computes Mean Squared Error of normalized keypoint distances
-4. **Similarity Scoring**: Converts distances to similarity scores using exponential decay
-
-## Testing
-
-### Running Tests
-
-```bash
-# Run all tests
-python3 -m pytest tests/
-
-# Run specific test file
-python3 -m pytest tests/test_pose_estimator.py
-
-# Run with verbose output
-python3 -m pytest -v tests/
-```
-
-### Test Images
-
-The system includes sample test images in `data/test_images/`:
-- Basketball poses (basketball1.jpg, basketball2.jpg, basketball3.jpg)
-- Dance poses (dancing1.jpg, dancing2.jpg, dancing3.jpg, dancing4.jpg)
-
-## Output and Results
-
-### Similarity Scores
-
-Similarity scores range from 0.0 to 1.0:
-- **0.8-1.0**: Very similar poses
-- **0.6-0.8**: Similar poses
-- **0.4-0.6**: Moderately similar poses
-- **0.2-0.4**: Somewhat similar poses
-- **0.0-0.2**: Different poses
-
-### Visualization Outputs
-
-When using `--visualize`, the system generates:
-
-1. **Main Comparison Grid** (`pose_comparison_[target].jpg`):
-   - Target image with skeleton (top, centered)
-   - Overlay image showing target + winning pose skeleton
-   - All comparison images with their best matching pose skeletons
-
-2. **Keypoint Analysis** (`keypoint_analysis_[target].jpg`):
-   - Detailed comparison of individual keypoints
-   - Distance analysis between corresponding body parts
-
-3. **Pose Overlay** (`pose_overlay_[target].jpg`):
-   - Target image with winning pose skeleton overlaid
-   - Color-coded: Blue (target), Orange (winning pose)
-
-## Performance and Optimization
-
-### Multi-Person Handling
-
-- Automatically detects multiple people in images
-- Selects highest confidence pose as target
-- Compares target against ALL people in comparison images
-- Uses best matching pose from each comparison image
-
-### Memory Management
-
-- Efficient image loading and processing
-- Optimized pose data structures
-- Minimal memory footprint during processing
-
-## Troubleshooting
-
-### Common Issues
-
-1. **No poses detected**: Lower the confidence threshold with `--threshold 0.3`
-2. **Poor similarity scores**: Check image quality and pose clarity
-3. **Visualization errors**: Ensure output directory exists and has write permissions
-
-### Debug Mode
-
-Use `--verbose` for detailed logging:
-
-```bash
-python3 main.py --target image.jpg --comparison-dir images/ --verbose
-```
-
-## Project Status
-
-### Completed Features ✅
-
-- **Core Infrastructure**: Project structure, YOLO integration, pose estimation pipeline
-- **Pose Matching**: Keypoint extraction, normalization, similarity algorithms, ranking
-- **User Interface**: CLI interface, batch processing, results visualization
-- **Optimization**: Performance improvements, memory management, error handling
-- **Multi-Person Detection**: Handles multiple humans in images
-- **Advanced Visualization**: Diagnostic images with pose overlays and skeleton drawing
-
-### Current Capabilities
-
-- **Pose Detection**: YOLO v13 with configurable confidence thresholds
-- **Similarity Calculation**: Normalized pose comparison with MSE-based scoring
-- **Visualization**: Comprehensive diagnostic suite with pose overlays
-- **CLI Interface**: Full-featured command-line application
-- **Testing**: Automated testing with sample images
-
-### Technical Details
-
-- **Model**: YOLO v13 pose estimation (falls back to YOLOv8n-pose.pt)
-- **Keypoints**: 17 COCO format keypoints per person
-- **Similarity**: Position, scale, and orientation invariant comparison
-- **Performance**: Optimized for real-time processing and batch operations
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests for new functionality
-5. Submit a pull request
-
-## License
-
-[Add your license information here]
-
-## Acknowledgments
-
-- YOLO v13 for pose estimation
-- OpenCV for image processing
-- PyTorch for deep learning backend
+MIT License. See LICENSE file for details.

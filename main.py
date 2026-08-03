@@ -27,14 +27,46 @@ from utils.pose_utils import PoseData, SimilarityResult
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Find closest pose match using YOLOv11 pose estimation"
+        description="Poser: Pose Estimation, Compact Binary Database Storage, and Diversity-Constrained Video Art Synthesis"
     )
+    
+    subparsers = parser.add_subparsers(dest="command", help="Sub-commands: ingest, reconstruct, db-stats (or run legacy CLI)")
+
+    # Ingest subcommand
+    ingest_parser = subparsers.add_parser("ingest", help="Ingest video files or image folders into binary SQLite pose database")
+    ingest_parser.add_argument("--input-dir", help="Directory of source video files or image folders")
+    ingest_parser.add_argument("--video-file", help="Single source video file to ingest")
+    ingest_parser.add_argument("--db", default="pose_library.db", help="Path to SQLite database file (default: pose_library.db)")
+    ingest_parser.add_argument("--fps", type=float, default=12.0, help="Frame rate sampling interval for ingestion (default: 12.0)")
+    ingest_parser.add_argument("--model-size", choices=["n", "s", "m", "l", "x"], default="n", help="YOLOv11 model size (default: n)")
+
+    # Reconstruct subcommand
+    recon_parser = subparsers.add_parser("reconstruct", help="Reconstruct a target video clip using matching frames from ingested pose library")
+    recon_parser.add_argument("--target", required=True, help="Path to target video file or frame directory")
+    recon_parser.add_argument("--db", default="pose_library.db", help="Path to SQLite pose library database")
+    recon_parser.add_argument("--output", default="output_art.mp4", help="Path for generated video art output")
+    recon_parser.add_argument("--mode", choices=["diversity", "smooth"], default="diversity", help="Matching mode: 'diversity' (switch films) or 'smooth' (continuity)")
+    recon_parser.add_argument("--exclude-same-film", action="store_true", help="Do not pick frames from the target clip's source film")
+    recon_parser.add_argument("--max-clip-reuse", type=int, default=5, help="Max total seconds pulled from any single source film (default: 5)")
+    recon_parser.add_argument("--cooldown", type=int, default=5, help="Frame cooldown before reusing a film in diversity mode (default: 5)")
+    recon_parser.add_argument("--temporal-window", type=float, default=2.0, help="Local +/- refinement window in seconds (default: 2.0)")
+    recon_parser.add_argument("--model-size", choices=["n", "s", "m", "l", "x"], default="n", help="YOLOv11 model size (default: n)")
+    recon_parser.add_argument("--visualize", action="store_true", help="Generate diagnostic visualization frames")
+
+    # DB Stats subcommand
+    stats_parser = subparsers.add_parser("db-stats", help="Inspect binary SQLite database stats")
+    stats_parser.add_argument("--db", default="pose_library.db", help="Path to SQLite database file")
+
+    # Legacy / top-level flags (backwards compatibility)
     parser.add_argument(
         "--target",
         help="Path to target image OR directory of target images (not required if using --video-input)",
     )
     parser.add_argument(
         "--comparison-dir", help="Directory containing comparison images (required unless using --clear-cache only)"
+    )
+    parser.add_argument(
+        "--db", default="pose_library.db", help="Path to SQLite database file"
     )
     parser.add_argument(
         "--random-target",
@@ -109,7 +141,6 @@ def parse_arguments():
         action="store_true",
         help="Delete temporary frame files after video processing (default: keep frames)",
     )
-
     parser.add_argument(
         "--model-size",
         choices=["n", "s", "m", "l", "x"],
@@ -1454,12 +1485,202 @@ def save_results(results, output_path, target_pose):
         json.dump(output_data, f, indent=2)
 
 
+def handle_db_stats(args):
+    """Display SQLite database statistics."""
+    from pose_db import PoseDatabase
+    db = PoseDatabase(args.db)
+    stats = db.get_stats()
+    print("\n=== POSE DATABASE STATISTICS ===")
+    print(f"Database file:  {stats['db_path']}")
+    print(f"Total films:    {stats['total_films']}")
+    print(f"Total poses:    {stats['total_poses']}")
+    print(f"File size:      {stats['db_size_mb']} MB ({stats['db_size_bytes']} bytes)")
+    print("=" * 35)
+
+
+def handle_ingest(args):
+    """Ingest source videos or frames into SQLite binary pose database."""
+    from pose_db import PoseDatabase
+    from pose_estimator import PoseEstimator
+    from utils.image_utils import load_image
+
+    if not args.input_dir and not args.video_file:
+        print("Error: Specify --input-dir or --video-file for ingestion.")
+        sys.exit(1)
+
+    db = PoseDatabase(args.db)
+    estimator = PoseEstimator(model_size=args.model_size)
+
+    media_files = []
+    if args.video_file:
+        media_files.append(Path(args.video_file))
+    if args.input_dir:
+        input_path = Path(args.input_dir).expanduser()
+        valid_exts = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".flv"}
+        for f in input_path.rglob("*"):
+            if f.is_file() and f.suffix.lower() in valid_exts:
+                media_files.append(f)
+
+    if not media_files:
+        print("No video files found to ingest.")
+        return
+
+    print(f"Found {len(media_files)} video file(s) for ingestion.")
+    for vid_path in media_files:
+        print(f"Ingesting: {vid_path.name}")
+        film_id = db.register_film(title=vid_path.stem, filepath=str(vid_path), fps=args.fps)
+
+        # Extract frames to temp directory
+        temp_dir = Path("results/temp_ingest") / vid_path.stem
+        success, frame_count = extract_frames_from_video(str(vid_path), str(temp_dir), fps=args.fps)
+        if not success:
+            continue
+
+        frame_files = sorted(list(temp_dir.glob("frame_*.jpg")))
+        pose_records = []
+
+        for idx, fpath in enumerate(tqdm(frame_files, desc=f"Processing {vid_path.stem}")):
+            img = load_image(str(fpath))
+            poses = estimator.extract_poses(img, str(fpath))
+            if poses:
+                best_pose = max(poses, key=lambda p: p.confidence_score)
+                pose_records.append({
+                    "frame_idx": idx,
+                    "timestamp": idx / args.fps,
+                    "bbox": best_pose.bounding_box,
+                    "confidence": best_pose.confidence_score,
+                    "keypoints": best_pose.keypoints
+                })
+
+        db.add_poses_batch(film_id, pose_records)
+        print(f"Successfully ingested {len(pose_records)} poses for {vid_path.stem}")
+
+        # Cleanup temp frames
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    handle_db_stats(args)
+
+
+def handle_reconstruct(args):
+    """Reconstruct a target video clip using matching frames from SQLite pose database."""
+    from pose_db import PoseDatabase
+    from pose_estimator import PoseEstimator
+    from pose_matcher import PoseMatcher
+    from utils.image_utils import load_image
+
+    db = PoseDatabase(args.db)
+    stats = db.get_stats()
+    if stats["total_poses"] == 0:
+        print(f"Error: Database '{args.db}' contains 0 poses. Ingest films first using `python3 main.py ingest --input-dir /path/to/movies`.")
+        sys.exit(1)
+
+    estimator = PoseEstimator(model_size=args.model_size)
+    matcher = PoseMatcher()
+
+    target_path = Path(args.target)
+    target_frames_dir = Path("results/temp_reconstruct_target")
+    
+    if target_path.is_file():
+        print(f"Extracting target video frames: {target_path.name}")
+        extract_frames_from_video(str(target_path), str(target_frames_dir), fps=30.0)
+        target_frame_files = sorted(list(target_frames_dir.glob("frame_*.jpg")))
+    else:
+        target_frame_files = sorted(list(target_path.glob("*.jpg")) + list(target_path.glob("*.png")))
+
+    if not target_frame_files:
+        print(f"Error: No target frames found at {args.target}")
+        sys.exit(1)
+
+    print(f"Processing target trajectory ({len(target_frame_files)} frames)...")
+    target_vectors = []
+    target_poses = []
+    
+    for fpath in tqdm(target_frame_files, desc="Extracting target trajectory"):
+        img = load_image(str(fpath))
+        poses = estimator.extract_poses(img, str(fpath))
+        if poses:
+            best_pose = max(poses, key=lambda p: p.confidence_score)
+            vec = PoseDatabase.normalize_keypoints_to_vector(best_pose.keypoints)
+            target_vectors.append(vec)
+            target_poses.append((fpath, img, best_pose))
+        else:
+            target_vectors.append(None)
+            target_poses.append((fpath, img, None))
+
+    target_film_title = target_path.stem
+    print(f"Running sequence matching (Mode: {args.mode}, Exclude target film: {args.exclude_same_film})...")
+    matches = matcher.match_db_sequence(
+        target_vectors=target_vectors,
+        pose_db=db,
+        mode=args.mode,
+        exclude_same_film=args.exclude_same_film,
+        max_clip_reuse=args.max_clip_reuse,
+        cooldown=args.cooldown,
+        target_film_title=target_film_title
+    )
+
+    # Render output frames
+    render_dir = Path("results/reconstruct_render")
+    render_dir.mkdir(parents=True, exist_ok=True)
+    
+    visualizer = PoseVisualizer()
+    print("Rendering composite video art frames...")
+    
+    for idx, (match, (target_fpath, target_img, target_pose)) in enumerate(zip(matches, target_poses)):
+        out_frame_path = render_dir / f"frame_{idx+1:04d}.png"
+        
+        if match and match.get("film_path") and Path(match["film_path"]).exists():
+            try:
+                # Load matching source frame
+                source_frame_path = Path(match["film_path"])
+                source_img = load_image(str(source_frame_path))
+                
+                if target_pose and source_img is not None:
+                    # Align and composite person overlay onto target frame
+                    comp_vis = visualizer.create_winning_pose_overlay(
+                        target_img,
+                        target_pose,
+                        PoseData(
+                            keypoints=[(float(match["vector"][2*i]), float(match["vector"][2*i+1]), 0.9) if match["vector"][2*i] != 0 else None for i in range(17)],
+                            bounding_box=match["bbox"],
+                            confidence_score=match["confidence"],
+                            image_path=str(source_frame_path),
+                            pose_id=f"db_match_{match['pose_id']}"
+                        ),
+                        match["similarity_score"]
+                    )
+                    cv2.imwrite(str(out_frame_path), comp_vis)
+                else:
+                    cv2.imwrite(str(out_frame_path), source_img if source_img is not None else target_img)
+            except Exception as e:
+                cv2.imwrite(str(out_frame_path), target_img)
+        else:
+            cv2.imwrite(str(out_frame_path), target_img)
+
+    # Combine frames into output video
+    print(f"Encoding output video: {args.output}")
+    create_video_from_frames(str(render_dir), args.output, fps=30.0)
+    print(f"✨ Video art synthesis complete! Saved to {args.output}")
+
+    # Cleanup temp directories
+    shutil.rmtree(target_frames_dir, ignore_errors=True)
+
+
 def main():
     """Main application entry point."""
     args = parse_arguments()
 
-    # Validate required arguments
-    # Allow cache clearing without other arguments
+    if args.command == "db-stats":
+        handle_db_stats(args)
+        return
+    elif args.command == "ingest":
+        handle_ingest(args)
+        return
+    elif args.command == "reconstruct":
+        handle_reconstruct(args)
+        return
+
+    # Validate required arguments for legacy mode
     if args.clear_cache and not args.target and not args.video_input:
         from pose_cache import PoseCache
         PoseCache().clear_cache()
@@ -1488,112 +1709,39 @@ def main():
 
         # Check if batch processing mode is enabled
         if args.batch_process:
-            # Force layer poses for batch processing
             args.layer_poses = True
             process_batch_targets(args)
             return
 
-        # Single image processing mode (original behavior)
-        # Get target and comparison paths
+        # Single target image legacy flow
         target_image_path = get_target_image_path(args)
         comparison_dir = Path(args.comparison_dir)
-        if not comparison_dir.exists() or not comparison_dir.is_dir():
-            print(f"Error: Invalid comparison directory: {args.comparison_dir}")
-            sys.exit(1)
-
         comparison_images = get_comparison_images(comparison_dir)
 
-        # Initialize pose estimator
-        if args.verbose:
-            print("Initializing YOLOv11 pose estimator...")
-
-        if args.clear_cache:
-            from pose_cache import PoseCache
-
-            PoseCache().clear_cache()
-            print("Pose cache cleared.")
-
-        start_time = time.time()
         estimator = PoseEstimator(
             confidence_threshold=args.threshold,
             model_size=args.model_size,
             use_cache=not args.no_cache,
             verbose=args.verbose,
         )
-        init_time = time.time() - start_time
-
-        if args.verbose:
-            print(f"Model initialization took: {init_time:.2f} seconds")
-
-        # Process target image
-        if args.verbose:
-            print(f"Processing target image: {target_image_path}")
 
         target_image = load_image(target_image_path)
-        start_time = time.time()
         target_poses = estimator.extract_poses(target_image, target_image_path)
-        target_time = time.time() - start_time
-
-        if args.verbose:
-            print(f"Target pose extraction took: {target_time:.2f} seconds")
-
         if not target_poses:
             print("Error: No poses detected in target image")
             sys.exit(1)
 
-        # Use highest confidence pose as target
         target_pose = max(target_poses, key=lambda p: p.confidence_score)
-        if args.verbose:
-            if len(target_poses) > 1:
-                print(
-                    f"Found {len(target_poses)} people in target image, using highest confidence person"
-                )
-                for i, pose in enumerate(target_poses):
-                    print(f"  Person {i+1}: {pose.confidence_score:.3f} confidence")
-                print(
-                    f"Selected target pose: {target_pose.pose_id} with {target_pose.confidence_score:.3f} confidence"
-                )
-            else:
-                print(f"Target pose confidence: {target_pose.confidence_score:.3f}")
-
-        # Process comparison images
-        if args.verbose:
-            print(f"Processing comparison images from: {args.comparison_dir}")
-
         matcher = PoseMatcher()
-        results, total_time, pose_extraction_time, pose_matching_time = (
-            process_comparison_images(
-                estimator,
-                matcher,
-                target_pose,
-                comparison_images,
-                args.relative_visibility_threshold,
-                args.verbose,
-            )
+        results, _, _, _ = process_comparison_images(
+            estimator, matcher, target_pose, comparison_images, args.relative_visibility_threshold, args.verbose
         )
 
-        # Sort and display results
         results.sort(key=lambda x: x.similarity_score, reverse=True)
         print_results(results, args.max_results)
 
-        # Print timing summary
-        if args.verbose:
-            print_timing_summary(
-                init_time,
-                target_time,
-                total_time,
-                pose_extraction_time,
-                pose_matching_time,
-                len(comparison_images),
-            )
-
-        # Generate visualizations
         if args.visualize:
-            # Limit results for visualization based on max_results
-            limited_results = (
-                results[: args.max_results] if args.max_results else results
-            )
-
+            limited_results = results[: args.max_results] if args.max_results else results
             generate_visualizations(
                 estimator,
                 target_image,
@@ -1607,7 +1755,6 @@ def main():
                 layer_poses=args.layer_poses,
             )
 
-        # Save results
         if args.output:
             save_results(results, args.output, target_pose)
             print(f"Results saved to: {args.output}")
@@ -1616,7 +1763,6 @@ def main():
         print(f"Error: {e}")
         if args.verbose:
             import traceback
-
             traceback.print_exc()
         sys.exit(1)
 
