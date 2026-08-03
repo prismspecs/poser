@@ -715,10 +715,10 @@ def extract_frames_from_video(
     cmd.append(frame_pattern)
 
     if verbose:
-        print(f"🎬 Extracting frames from video: {Path(video_path).name}")
-        print(f"📁 Output directory: {output_path}")
+        print(f" Extracting frames from video: {Path(video_path).name}")
+        print(f" Output directory: {output_path}")
         if fps:
-            print(f"🎯 Target FPS: {fps}")
+            print(f" Target FPS: {fps}")
 
     try:
         result = subprocess.run(
@@ -726,7 +726,7 @@ def extract_frames_from_video(
         )
 
         if result.returncode != 0:
-            print(f"❌ FFmpeg error: {result.stderr}")
+            print(f" FFmpeg error: {result.stderr}")
             return False, 0
 
         # Count extracted frames
@@ -734,15 +734,15 @@ def extract_frames_from_video(
         frame_count = len(frame_files)
 
         if verbose:
-            print(f"✅ Extracted {frame_count} frames successfully")
+            print(f" Extracted {frame_count} frames successfully")
 
         return True, frame_count
 
     except subprocess.TimeoutExpired:
-        print("❌ Video extraction timed out (>5 minutes)")
+        print(" Video extraction timed out (>5 minutes)")
         return False, 0
     except Exception as e:
-        print(f"❌ Error extracting frames: {e}")
+        print(f" Error extracting frames: {e}")
         return False, 0
 
 
@@ -769,13 +769,13 @@ def create_video_from_frames(
     frames_path = Path(frames_dir)
 
     if not frames_path.exists():
-        print(f"❌ Frames directory not found: {frames_dir}")
+        print(f" Frames directory not found: {frames_dir}")
         return False
 
     # Get all frame files and sort them numerically
     frame_files = list(frames_path.glob("frame_*.png"))
     if not frame_files:
-        print(f"❌ No frame files found in {frames_dir}")
+        print(f" No frame files found in {frames_dir}")
         return False
 
     # Sort by frame number extracted from filename
@@ -820,10 +820,10 @@ def create_video_from_frames(
         ]
 
         if verbose:
-            print(f"🎬 Creating video from {len(frame_files)} frames")
-            print(f"📁 Input pattern: {input_pattern}")
-            print(f"📤 Output video: {output_video}")
-            print(f"🎯 FPS: {fps}")
+            print(f" Creating video from {len(frame_files)} frames")
+            print(f" Input pattern: {input_pattern}")
+            print(f" Output video: {output_video}")
+            print(f" FPS: {fps}")
 
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=600  # 10 minute timeout
@@ -835,11 +835,11 @@ def create_video_from_frames(
         shutil.rmtree(temp_frames_dir, ignore_errors=True)
 
         if result.returncode != 0:
-            print(f"❌ FFmpeg error creating video: {result.stderr}")
+            print(f" FFmpeg error creating video: {result.stderr}")
             return False
 
         if verbose:
-            print(f"✅ Video created successfully: {output_video}")
+            print(f" Video created successfully: {output_video}")
 
         return True
 
@@ -848,14 +848,14 @@ def create_video_from_frames(
         import shutil
 
         shutil.rmtree(temp_frames_dir, ignore_errors=True)
-        print("❌ Video creation timed out (>10 minutes)")
+        print(" Video creation timed out (>10 minutes)")
         return False
     except Exception as e:
         # Cleanup on error
         import shutil
 
         shutil.rmtree(temp_frames_dir, ignore_errors=True)
-        print(f"❌ Error creating video: {e}")
+        print(f" Error creating video: {e}")
         return False
 
 
@@ -886,12 +886,12 @@ def cleanup_temporary_frames(frames_dir: str, verbose: bool = False) -> bool:
                 removed_count += 1
 
         if verbose and removed_count > 0:
-            print(f"🧹 Cleaned up {removed_count} temporary frame files")
+            print(f" Cleaned up {removed_count} temporary frame files")
 
         return True
 
     except Exception as e:
-        print(f"⚠️  Warning: Failed to cleanup frames: {e}")
+        print(f"️  Warning: Failed to cleanup frames: {e}")
         return False
 
 
@@ -1009,8 +1009,8 @@ def process_video_workflow(args):
     """Process video input and output workflow."""
     # Check ffmpeg availability
     if not check_ffmpeg_available():
-        print("❌ Error: FFmpeg is required for video processing but not found.")
-        print("💡 Install FFmpeg: https://ffmpeg.org/download.html")
+        print(" Error: FFmpeg is required for video processing but not found.")
+        print(" Install FFmpeg: https://ffmpeg.org/download.html")
         print("   macOS: brew install ffmpeg")
         print("   Ubuntu: sudo apt install ffmpeg")
         print("   Windows: Download from https://ffmpeg.org/")
@@ -1019,19 +1019,19 @@ def process_video_workflow(args):
     # Validate video input
     video_input = Path(args.video_input)
     if not video_input.exists():
-        print(f"❌ Error: Video input file not found: {args.video_input}")
+        print(f" Error: Video input file not found: {args.video_input}")
         sys.exit(1)
 
     # Setup temporary frame directory
     temp_frames_dir = Path("data/input_frames")
     temp_frames_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n🎬 VIDEO PROCESSING WORKFLOW")
-    print(f"📹 Input video: {video_input.name}")
-    print(f"📁 Comparison images: {args.comparison_dir}")
+    print(f"\n VIDEO PROCESSING WORKFLOW")
+    print(f" Input video: {video_input.name}")
+    print(f" Comparison images: {args.comparison_dir}")
     if args.video_output:
-        print(f"📤 Output video: {args.video_output}")
-    print(f"🎯 FPS: {args.fps}")
+        print(f" Output video: {args.video_output}")
+    print(f" FPS: {args.fps}")
     print("=" * 50)
 
     try:
@@ -1046,7 +1046,7 @@ def process_video_workflow(args):
         )
 
         if not success or frame_count == 0:
-            print("❌ Failed to extract frames from video")
+            print(" Failed to extract frames from video")
             sys.exit(1)
 
         # Step 2: Set up arguments for batch processing
@@ -1057,7 +1057,7 @@ def process_video_workflow(args):
         args.layer_poses = True
 
         # Step 3: Process frames with pose matching
-        print(f"\n🎞️ Processing {frame_count} extracted frames...")
+        print(f"\n️ Processing {frame_count} extracted frames...")
         process_batch_targets(args)
 
         # Step 4: Create output video if requested
@@ -1073,24 +1073,24 @@ def process_video_workflow(args):
             )
 
             if success:
-                print(f"\n🎉 Video processing complete!")
-                print(f"📹 Output video: {args.video_output}")
+                print(f"\n Video processing complete!")
+                print(f" Output video: {args.video_output}")
             else:
-                print(f"\n⚠️  Frame processing completed but video creation failed")
-                print(f"📁 Processed frames available in: {layer_output_dir}")
+                print(f"\n️  Frame processing completed but video creation failed")
+                print(f" Processed frames available in: {layer_output_dir}")
 
         # Step 5: Cleanup temporary frames if requested
         if args.cleanup_frames:
             cleanup_temporary_frames(str(temp_frames_dir), args.verbose)
         else:
-            print(f"\n💾 Extracted frames saved in: {temp_frames_dir}")
+            print(f"\n Extracted frames saved in: {temp_frames_dir}")
             print(f"   Use --cleanup-frames to auto-delete these files")
 
         # Restore original target
         args.target = original_target
 
     except Exception as e:
-        print(f"❌ Error in video processing workflow: {e}")
+        print(f" Error in video processing workflow: {e}")
         if args.verbose:
             import traceback
 
@@ -1120,18 +1120,18 @@ def process_batch_targets(args):
                 subdirs.add(str(relative_path.parent))
         
         if subdirs:
-            print(f"📁 Found images in {len(subdirs)} subdirectories:")
+            print(f" Found images in {len(subdirs)} subdirectories:")
             for subdir in sorted(subdirs):
                 subdir_images = [img for img in comparison_images 
                                if str(img.relative_to(comparison_dir)).startswith(subdir)]
-                print(f"   📂 {subdir}: {len(subdir_images)} images")
+                print(f"    {subdir}: {len(subdir_images)} images")
         else:
-            print("📁 All comparison images are in the root directory")
+            print(" All comparison images are in the root directory")
 
-    print(f"\n🎬 BATCH PROCESSING MODE")
-    print(f"📁 Processing {len(target_images)} target frames")
-    print(f"🎯 Using {len(comparison_images)} comparison images")
-    print(f"📤 Output directory: {args.output_dir}")
+    print(f"\n BATCH PROCESSING MODE")
+    print(f" Processing {len(target_images)} target frames")
+    print(f" Using {len(comparison_images)} comparison images")
+    print(f" Output directory: {args.output_dir}")
     print("=" * 50)
 
     # Initialize pose estimator
@@ -1158,9 +1158,9 @@ def process_batch_targets(args):
 
     # Pre-load all comparison poses efficiently using cache
     if args.verbose:
-        print(f"\n📋 Loading poses from {len(comparison_images)} comparison images...")
+        print(f"\n Loading poses from {len(comparison_images)} comparison images...")
         print(
-            f"💾 Cache database contains {len(estimator.cache.cache) if estimator.cache else 0} cached images"
+            f" Cache database contains {len(estimator.cache.cache) if estimator.cache else 0} cached images"
         )
 
     comparison_poses_data = {}
@@ -1170,7 +1170,7 @@ def process_batch_targets(args):
 
     # Optimize database loading by separating cached vs uncached
     if args.verbose:
-        print("⚡ Optimizing comparison database loading...")
+        print(" Optimizing comparison database loading...")
 
     # Pre-check which images are cached vs need extraction
     cached_paths = []
@@ -1186,7 +1186,7 @@ def process_batch_targets(args):
     if args.verbose:
         check_time = time.time() - check_start
         print(
-            f"💾 Cache check ({check_time:.1f}s): {len(cached_paths)} cached, {len(uncached_paths)} need extraction"
+            f" Cache check ({check_time:.1f}s): {len(cached_paths)} cached, {len(uncached_paths)} need extraction"
         )
 
     # Batch process cached images (should be very fast)
@@ -1195,7 +1195,7 @@ def process_batch_targets(args):
     else:
         cached_iterator = enumerate(
             tqdm(
-                cached_paths, desc="💾 Loading cached poses", unit="pose", leave=False
+                cached_paths, desc=" Loading cached poses", unit="pose", leave=False
             ),
             1,
         )
@@ -1229,7 +1229,7 @@ def process_batch_targets(args):
     else:
         uncached_iterator = enumerate(
             tqdm(
-                uncached_paths, desc="🔍 Extracting new poses", unit="pose", leave=False
+                uncached_paths, desc=" Extracting new poses", unit="pose", leave=False
             ),
             1,
         )
@@ -1259,9 +1259,9 @@ def process_batch_targets(args):
         elapsed = time.time() - start_time
         rate = len(comparison_images) / elapsed if elapsed > 0 else 0
         print(
-            f"✅ Loaded {total_poses} poses from {len(comparison_images)} images in {elapsed:.1f}s ({rate:.0f}/sec)"
+            f" Loaded {total_poses} poses from {len(comparison_images)} images in {elapsed:.1f}s ({rate:.0f}/sec)"
         )
-        print(f"📊 Cache stats: {cache_hits} hits, {cache_misses} misses")
+        print(f" Cache stats: {cache_hits} hits, {cache_misses} misses")
 
     matcher = PoseMatcher()
 
@@ -1274,7 +1274,7 @@ def process_batch_targets(args):
         if args.verbose:
             old_frames = list(layer_output_dir.glob("frame_*.png"))
             if old_frames:
-                print(f"🧹 Cleaning up {len(old_frames)} old processed frames...")
+                print(f" Cleaning up {len(old_frames)} old processed frames...")
 
         # Remove old frame files but keep directory
         for old_frame in layer_output_dir.glob("frame_*.png"):
@@ -1302,7 +1302,7 @@ def process_batch_targets(args):
         frame_iterator = enumerate(
             tqdm(
                 target_images,
-                desc="🎞️ Processing frames",
+                desc="️ Processing frames",
                 unit="frame",
                 bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
             ),
@@ -1313,7 +1313,7 @@ def process_batch_targets(args):
         # Progress indicator for verbose mode only
         if args.verbose:
             print(
-                f"\n🎞️ Processing frame {frame_idx:04d}/{len(target_images):04d}: {Path(target_image_path).name}"
+                f"\n️ Processing frame {frame_idx:04d}/{len(target_images):04d}: {Path(target_image_path).name}"
             )
 
         try:
@@ -1332,7 +1332,7 @@ def process_batch_targets(args):
                 # Instead of skipping, use the original frame
                 if args.verbose:
                     print(
-                        f"📷 Frame {frame_idx:04d}: No pose/matches found, using original frame"
+                        f" Frame {frame_idx:04d}: No pose/matches found, using original frame"
                     )
 
                 # Create output with original frame
@@ -1354,12 +1354,12 @@ def process_batch_targets(args):
 
                         if args.verbose:
                             print(
-                                f"✅ Frame {frame_idx:04d} saved as original: {frame_output_path.name}"
+                                f" Frame {frame_idx:04d} saved as original: {frame_output_path.name}"
                             )
                         successful_frames += 1
 
                     except Exception as e:
-                        print(f"❌ Error saving original frame {frame_idx:04d}: {e}")
+                        print(f" Error saving original frame {frame_idx:04d}: {e}")
                         failed_frames += 1
                 else:
                     failed_frames += 1
@@ -1416,36 +1416,36 @@ def process_batch_targets(args):
                         if layered_vis is not None:
                             if args.verbose:
                                 print(
-                                    f"✅ Frame {frame_idx:04d} saved: {frame_output_path.name} (similarity: {best_result.similarity_score:.3f})"
+                                    f" Frame {frame_idx:04d} saved: {frame_output_path.name} (similarity: {best_result.similarity_score:.3f})"
                                 )
                             successful_frames += 1
                         else:
                             if args.verbose:
                                 print(
-                                    f"❌ Failed to create layered visualization for frame {frame_idx:04d}"
+                                    f" Failed to create layered visualization for frame {frame_idx:04d}"
                                 )
                             failed_frames += 1
 
                     except Exception as e:
                         if args.verbose:
                             print(
-                                f"❌ Error creating layered visualization for frame {frame_idx:04d}: {e}"
+                                f" Error creating layered visualization for frame {frame_idx:04d}: {e}"
                             )
                         failed_frames += 1
                 else:
                     if args.verbose:
                         print(
-                            f"⚠️  No suitable comparison pose found for frame {frame_idx:04d}"
+                            f"️  No suitable comparison pose found for frame {frame_idx:04d}"
                         )
                     failed_frames += 1
             else:
                 if args.verbose:
-                    print(f"⚠️  No results found for frame {frame_idx:04d}")
+                    print(f"️  No results found for frame {frame_idx:04d}")
                 failed_frames += 1
 
         except Exception as e:
             if args.verbose:
-                print(f"❌ Error processing frame {frame_idx:04d}: {e}")
+                print(f" Error processing frame {frame_idx:04d}: {e}")
                 import traceback
 
                 traceback.print_exc()
@@ -1453,15 +1453,15 @@ def process_batch_targets(args):
 
     # Print batch summary
     total_time = time.time() - batch_start_time
-    print(f"\n🏁 BATCH PROCESSING COMPLETE")
+    print(f"\n BATCH PROCESSING COMPLETE")
     print(f"=" * 50)
-    print(f"✅ Successful frames: {successful_frames}")
-    print(f"❌ Failed frames: {failed_frames}")
-    print(f"⏱️  Total time: {total_time:.2f} seconds")
-    print(f"📊 Average time per frame: {total_time/len(target_images):.2f} seconds")
-    print(f"📁 Output saved to: {layer_output_dir}")
+    print(f" Successful frames: {successful_frames}")
+    print(f" Failed frames: {failed_frames}")
+    print(f"️  Total time: {total_time:.2f} seconds")
+    print(f" Average time per frame: {total_time/len(target_images):.2f} seconds")
+    print(f" Output saved to: {layer_output_dir}")
     print(
-        f"💡 To create video: ffmpeg -framerate 30 -i {layer_output_dir}/frame_%04d_*.png -c:v libx264 -pix_fmt yuv420p output_video.mp4"
+        f" To create video: ffmpeg -framerate 30 -i {layer_output_dir}/frame_%04d_*.png -c:v libx264 -pix_fmt yuv420p output_video.mp4"
     )
 
 
@@ -1660,7 +1660,7 @@ def handle_reconstruct(args):
     # Combine frames into output video
     print(f"Encoding output video: {args.output}")
     create_video_from_frames(str(render_dir), args.output, fps=30.0)
-    print(f"✨ Video art synthesis complete! Saved to {args.output}")
+    print(f" Video art synthesis complete! Saved to {args.output}")
 
     # Cleanup temp directories
     shutil.rmtree(target_frames_dir, ignore_errors=True)
@@ -1684,25 +1684,25 @@ def main():
     if args.clear_cache and not args.target and not args.video_input:
         from pose_cache import PoseCache
         PoseCache().clear_cache()
-        print("✅ Pose cache cleared.")
+        print(" Pose cache cleared.")
         sys.exit(0)
 
     if not args.target and not args.video_input:
-        print("❌ Error: Either --target or --video-input must be specified")
+        print(" Error: Either --target or --video-input must be specified")
         print("   Use --target for image/directory processing")
         print("   Use --video-input for video processing")
         sys.exit(1)
 
     # Validate comparison-dir is provided when not just clearing cache
     if not args.comparison_dir:
-        print("❌ Error: --comparison-dir is required")
+        print(" Error: --comparison-dir is required")
         sys.exit(1)
 
     try:
         # Check if video processing mode is enabled
         if args.video_input:
             if not args.comparison_dir:
-                print("❌ Error: --comparison-dir is required for video processing")
+                print(" Error: --comparison-dir is required for video processing")
                 sys.exit(1)
             process_video_workflow(args)
             return

@@ -1,6 +1,6 @@
 # Poser: Technical Blueprint & Implementation Roadmap
 
-## 🎯 Architecture Overview
+## Architecture Overview
 
 ```
 [ Input Target Video ]
@@ -30,7 +30,7 @@
 
 ---
 
-## 🗄 1. Compact Binary Database Schema (SQLite / NumPy BLOBs)
+## 1. Compact Binary Database Schema (SQLite / NumPy BLOBs)
 
 ### Problem with JSON Cache
 `pose_cache.json` currently stores keypoints as verbose JSON strings, resulting in ~15 MB for a few frames. For 100 films (~17M frames), JSON would require over 15-20 GB and create severe I/O bottlenecks.
@@ -63,7 +63,7 @@ CREATE INDEX IF NOT EXISTS idx_film_frame ON poses(film_id, frame_idx);
 
 ---
 
-## 🔍 2. Coarse-to-Fine Matching & Local Window Refinement
+## 2. Coarse-to-Fine Matching & Local Window Refinement
 
 ### Interval Sampling & Keyframe Indexing
 1. **Coarse Search**: Store or index keyframes at sampled intervals (e.g. every 6-12 frames / 0.25-0.5s). Compute candidate matches using fast vector distance (MSE / Cosine similarity) on 34D normalized pose vectors.
@@ -73,7 +73,7 @@ CREATE INDEX IF NOT EXISTS idx_film_frame ON poses(film_id, frame_idx);
 
 ---
 
-## 🎨 3. Diversity Constraints & Film Switch Heuristics
+## 3. Diversity Constraints & Film Switch Heuristics
 
 To ensure maximum visual variety without sacrificing motion quality:
 
@@ -84,7 +84,7 @@ To ensure maximum visual variety without sacrificing motion quality:
 
 ---
 
-## 🤖 4. Integrated AI Tooling Standards
+## 4. Integrated AI Tooling Standards
 
 - **Gemini 3**: [`GEMINI.md`](file:///Users/grayson/workbench/poser/GEMINI.md), [`.gemini/skills/pose-video-art/SKILL.md`](file:///Users/grayson/workbench/poser/.gemini/skills/pose-video-art/SKILL.md)
 - **Claude Code**: [`CLAUDE.md`](file:///Users/grayson/workbench/poser/CLAUDE.md), [`.claude/skills/video-art-matcher/SKILL.md`](file:///Users/grayson/workbench/poser/.claude/skills/video-art-matcher/SKILL.md)

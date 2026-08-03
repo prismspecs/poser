@@ -1,12 +1,12 @@
 # Poser: Skeletal & Pose-Driven Video Art Synthesis Engine
 
-**`poser`** is an intelligent Python system designed to synthesize mesmerizing video art by extracting skeletal human pose trajectories from target video clips (e.g. a 15-second iconic dance scene) and reconstructing them frame-by-frame using closely matching poses retrieved from a massive, indexed library of source films (e.g., hundreds of Hollywood movies).
+**`poser`** is an intelligent Python system designed to synthesize video art by extracting skeletal human pose trajectories from target video clips (e.g. a 15-second dance scene) and reconstructing them frame-by-frame using closely matching poses retrieved from an indexed library of source films (e.g., hundreds of Hollywood movies).
 
 ---
 
-## 🎨 Concept & Artistic Vision
+## Concept & Artistic Vision
 
-Imagine taking a iconic 15-second dance sequence or martial arts routine and watching it play out in real-time, where **every single frame comes from a completely different film**, seamless in pose alignment but wildly diverse in visual style, lighting, color, and character!
+Imagine taking a 15-second dance sequence or martial arts routine and watching it play out in real-time, where **every single frame comes from a completely different film**, seamless in pose alignment but wildly diverse in visual style, lighting, color, and character.
 
 ```
 [ Target Clip (15s Dance) ] ──> Extract Keypoint Trajectory
@@ -26,10 +26,10 @@ Imagine taking a iconic 15-second dance sequence or martial arts routine and wat
 
 ---
 
-## ✨ Features
+## Features
 
 - **Massive Media Ingestion**: Single-pass pose extraction per movie with YOLOv11/v13.
-- **Ultra-Compact Pose Database**: Replaces massive JSON logs with compact SQLite binary tables storing 34D/51D normalized float16/float32 pose BLOBs.
+- **Ultra-Compact Pose Database**: Replaces JSON logs with compact SQLite binary tables storing 34D/51D normalized float16/float32 pose BLOBs.
 - **Coarse-to-Fine Vector Matching**:
   - **Interval Sampling**: Fast keyframe pose lookup across millions of frames.
   - **Temporal Refinement Window**: Inspects a $\pm 2.0$-second local window around matching candidates to assess temporal velocity and motion continuity.
@@ -42,9 +42,9 @@ Imagine taking a iconic 15-second dance sequence or martial arts routine and wat
 
 ---
 
-## 🗄 Database Architecture: High Efficiency Pose Storage
+## Database Architecture: High Efficiency Pose Storage
 
-Storing keypoint data for 100 movies (approx. $17,000,000$ frames) in standard JSON format would take over **15 GB** of disk space and saturate RAM. `poser` solves this using an optimized binary database format:
+Storing keypoint data for 100 movies (approx. 17,000,000 frames) in standard JSON format would take over **15 GB** of disk space and saturate RAM. `poser` solves this using an optimized binary database format:
 
 - **Keypoint Compression**: 17 COCO keypoints $(x, y, c)$ normalized and packed into a raw 34D/51D `float16` binary BLOB ($68$ to $102$ bytes per pose).
 - **Indexing**: SQLite database with composite indexing on `(film_id, frame_idx, timestamp)`.
@@ -52,7 +52,7 @@ Storing keypoint data for 100 movies (approx. $17,000,000$ frames) in standard J
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
@@ -75,7 +75,7 @@ pip install -r requirements.txt
 
 ---
 
-## 🛠 Usage & Workflows
+## Usage & Workflows
 
 ### 1. Ingest Video Media Library
 Extract and store skeletal poses from a directory of source movies:
@@ -104,7 +104,7 @@ python3 main.py db-stats --db pose_library.db
 
 ---
 
-## 🤖 LLM Agent & Skill Files
+## LLM Agent & Skill Files
 
 This project includes agent guidelines and skills for modern LLM tools:
 
@@ -116,7 +116,7 @@ This project includes agent guidelines and skills for modern LLM tools:
 
 ---
 
-## 🔬 Testing
+## Testing
 
 Run automated tests using pytest:
 ```bash
@@ -125,6 +125,6 @@ python3 -m pytest tests/ -v
 
 ---
 
-## 📄 License
+## License
 
 MIT License. See LICENSE file for details.

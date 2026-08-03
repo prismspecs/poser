@@ -4,7 +4,7 @@
 
 ---
 
-## 🚀 Architectural Goals & Workflows
+## Architectural Goals & Workflows
 
 1. **Massive Video Ingestion & Compact Database Indexing**:
    - Single-pass pose extraction per movie with compact binary storage (SQLite + Compressed NumPy vectors or HDF5/Parquet).
@@ -21,7 +21,7 @@
 
 ---
 
-## 🛠 Command Reference
+## Command Reference
 
 ### Database & Ingestion
 ```bash
@@ -56,7 +56,7 @@ python3 test_random_poses.py
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 poser/
@@ -77,7 +77,7 @@ poser/
 
 ---
 
-## 💡 Developer & Coding Guidelines
+## Developer & Coding Guidelines
 
 - **Pose Vector Standard**: 17 COCO keypoints (x, y, confidence). Poses must be normalized relative to torso center (hip/shoulder midpoint) and torso scale for orientation- and scale-invariant matching.
 - **Storage Efficiency**: Never store raw JSON for large-scale datasets. Use binary packed arrays (float16/float32) in SQLite BLOBs or HDF5/Parquet.
