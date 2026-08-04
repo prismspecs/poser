@@ -505,13 +505,14 @@ class PoseMatcher:
 
     def match_db_sequence(
         self,
-        target_vectors: List[np.ndarray],
+        target_vectors: List[Optional[np.ndarray]],
         pose_db: Any,
         mode: str = "diversity",
         exclude_same_film: bool = True,
-        max_clip_reuse: int = 5,
-        cooldown: int = 5,
-        target_film_title: Optional[str] = None
+        max_clip_reuse: int = 2,
+        cooldown: int = 12,
+        target_film_title: Optional[str] = None,
+        min_bbox_height: float = 250.0
     ) -> List[Dict[str, Any]]:
         """
         Match a sequence of target pose vectors against the SQLite pose database.
@@ -524,6 +525,7 @@ class PoseMatcher:
             max_clip_reuse: Maximum number of frames pulled from any single film.
             cooldown: Frames to wait before reusing a film in diversity mode.
             target_film_title: Title of source film for target sequence (for exclusion).
+            min_bbox_height: Minimum bounding box height (pixels) to filter background actors.
 
         Returns:
             List of winning pose match dictionaries per frame.
@@ -548,6 +550,11 @@ class PoseMatcher:
             for candidate in all_poses:
                 film_title = candidate["film_title"]
                 film_id = candidate["film_id"]
+
+                # Exclude tiny background actors
+                bbox = candidate.get("bbox")
+                if bbox and (bbox[3] - bbox[1]) < min_bbox_height:
+                    continue
 
                 # Exclude target film if requested
                 if exclude_same_film and target_film_title and film_title == target_film_title:

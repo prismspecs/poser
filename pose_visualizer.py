@@ -887,19 +887,40 @@ class PoseVisualizer:
         target_canvas = self._resize_to_hd_with_padding(target_image.copy())
         h_canvas, w_canvas = target_canvas.shape[:2]
 
-        # Extract segmentation mask for person in source_image
+        # Extract segmentation mask ONLY for the matching person in source_image
         src_mask = np.zeros(source_image.shape[:2], dtype=np.uint8)
         if segmentation_model is not None:
             try:
                 results = segmentation_model(source_image, verbose=False)
+                best_mask = None
+                best_iou = -1.0
+
+                s_bx1, s_by1, s_bx2, s_by2 = source_bbox
+
                 for r in results:
                     if r.masks is not None and len(r.masks) > 0:
-                        for i, cls_id in enumerate(r.boxes.cls):
-                            if int(cls_id) == 0:  # COCO class 0 = person
-                                m = (r.masks.data[i].cpu().numpy() * 255).astype(np.uint8)
-                                if m.shape != source_image.shape[:2]:
-                                    m = cv2.resize(m, (source_image.shape[1], source_image.shape[0]))
-                                src_mask = cv2.bitwise_or(src_mask, m)
+                        for i, box in enumerate(r.boxes):
+                            if int(box.cls[0]) == 0:  # COCO class 0 = person
+                                b = box.xyxy[0].cpu().numpy()  # x1, y1, x2, y2
+                                # Compute IoU overlap with target source_bbox
+                                ix1, iy1 = max(b[0], s_bx1), max(b[1], s_by1)
+                                ix2, iy2 = min(b[2], s_bx2), min(b[3], s_by2)
+                                iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+                                inter_area = iw * ih
+                                box_area = (b[2] - b[0]) * (b[3] - b[1])
+                                s_area = (s_bx2 - s_bx1) * (s_by2 - s_by1)
+                                union_area = box_area + s_area - inter_area + 1e-6
+                                iou = inter_area / union_area
+
+                                if iou > best_iou:
+                                    best_iou = iou
+                                    m = (r.masks.data[i].cpu().numpy() * 255).astype(np.uint8)
+                                    if m.shape != source_image.shape[:2]:
+                                        m = cv2.resize(m, (source_image.shape[1], source_image.shape[0]))
+                                    best_mask = m
+
+                if best_mask is not None and best_iou > 0.1:
+                    src_mask = best_mask
             except Exception:
                 pass
 
@@ -944,7 +965,10 @@ class PoseVisualizer:
         warped_src = cv2.warpAffine(source_image, M, (w_canvas, h_canvas))
         warped_mask = cv2.warpAffine(src_mask, M, (w_canvas, h_canvas))
 
-        alpha = (warped_mask > 127).astype(np.float32)[:, :, None]
+        # Smooth edges of warped mask using Gaussian Blur for natural alpha blending
+        blurred_mask = cv2.GaussianBlur(warped_mask, (15, 15), 0)
+        alpha = (blurred_mask.astype(np.float32) / 255.0)[:, :, None]
+
         composite = (target_canvas.astype(np.float32) * (1.0 - alpha) + warped_src.astype(np.float32) * alpha).astype(np.uint8)
 
         return composite

@@ -1531,7 +1531,7 @@ def handle_ingest(args):
         film_id = db.register_film(title=vid_path.stem, filepath=str(vid_path), fps=args.fps)
 
         # Extract frames to temp directory
-        temp_dir = Path("results/temp_ingest") / vid_path.stem
+        temp_dir = Path("data/temp_ingest") / vid_path.stem
         success, frame_count = extract_frames_from_video(str(vid_path), str(temp_dir), fps=args.fps)
         if not success:
             continue
@@ -1544,13 +1544,16 @@ def handle_ingest(args):
             poses = estimator.extract_poses(img, str(fpath))
             if poses:
                 best_pose = max(poses, key=lambda p: p.confidence_score)
-                pose_records.append({
-                    "frame_idx": idx,
-                    "timestamp": idx / args.fps,
-                    "bbox": best_pose.bounding_box,
-                    "confidence": best_pose.confidence_score,
-                    "keypoints": best_pose.keypoints
-                })
+                # Enforce torso keypoint validation: left_shoulder(5), right_shoulder(6), left_hip(11), right_hip(12)
+                kps = best_pose.keypoints
+                if len(kps) == 17 and all(kps[i] is not None for i in [5, 6, 11, 12]):
+                    pose_records.append({
+                        "frame_idx": idx,
+                        "timestamp": idx / args.fps,
+                        "bbox": best_pose.bounding_box,
+                        "confidence": best_pose.confidence_score,
+                        "keypoints": best_pose.keypoints
+                    })
 
         db.add_poses_batch(film_id, pose_records)
         print(f"Successfully ingested {len(pose_records)} poses for {vid_path.stem}")
