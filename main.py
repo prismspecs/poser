@@ -52,6 +52,7 @@ def parse_arguments():
     recon_parser.add_argument("--temporal-window", type=float, default=2.0, help="Local +/- refinement window in seconds (default: 2.0)")
     recon_parser.add_argument("--model-size", choices=["n", "s", "m", "l", "x"], default="n", help="YOLOv11 model size (default: n)")
     recon_parser.add_argument("--visualize", action="store_true", help="Generate diagnostic visualization frames")
+    recon_parser.add_argument("--diagnostic", action="store_true", help="Generate side-by-side diagnostic frames (target left, match right with skeletons and scores)")
 
     # DB Stats subcommand
     stats_parser = subparsers.add_parser("db-stats", help="Inspect binary SQLite database stats")
@@ -1644,27 +1645,42 @@ def handle_reconstruct(args):
                     source_img = load_image(str(source_frame_path))
 
                 if source_img is not None:
-                    # Segment person from source video frame and composite directly onto target frame
-                    comp_vis = visualizer.create_person_cutout_composite(
-                        target_image=target_img,
-                        target_pose=target_pose,
-                        source_image=source_img,
-                        source_bbox=match["bbox"],
-                        segmentation_model=estimator.segmentation_model
-                    )
-
-                    # Draw skeleton overlay if visualize argument is explicitly set
-                    if getattr(args, "visualize", False) and target_pose is not None:
+                    if getattr(args, "diagnostic", False):
+                        # Side-by-side diagnostic comparison view (target left with skeleton, match right with skeleton & score)
                         source_poses = estimator.extract_poses(source_img, str(out_frame_path))
-                        if source_poses:
-                            s_pose = max(source_poses, key=lambda p: p.confidence_score)
-                            comp_vis = visualizer.create_winning_pose_overlay(
-                                target_img,
-                                target_pose,
-                                s_pose,
-                                match["similarity_score"],
-                                winning_image=source_img
-                            )
+                        s_pose = max(source_poses, key=lambda p: p.confidence_score) if source_poses else None
+                        comp_vis = visualizer.create_side_by_side_diagnostic(
+                            target_image=target_img,
+                            target_pose=target_pose,
+                            source_image=source_img,
+                            source_pose=s_pose,
+                            film_title=match["film_title"],
+                            frame_idx=match["frame_idx"],
+                            similarity_score=match["similarity_score"],
+                            frame_num=idx + 1
+                        )
+                    else:
+                        # Segment person from source video frame and composite directly onto target frame
+                        comp_vis = visualizer.create_person_cutout_composite(
+                            target_image=target_img,
+                            target_pose=target_pose,
+                            source_image=source_img,
+                            source_bbox=match["bbox"],
+                            segmentation_model=estimator.segmentation_model
+                        )
+
+                        # Draw skeleton overlay if visualize argument is explicitly set
+                        if getattr(args, "visualize", False) and target_pose is not None:
+                            source_poses = estimator.extract_poses(source_img, str(out_frame_path))
+                            if source_poses:
+                                s_pose = max(source_poses, key=lambda p: p.confidence_score)
+                                comp_vis = visualizer.create_winning_pose_overlay(
+                                    target_img,
+                                    target_pose,
+                                    s_pose,
+                                    match["similarity_score"],
+                                    winning_image=source_img
+                                )
             except Exception as e:
                 print(f"Warning rendering frame {idx+1}: {e}")
 

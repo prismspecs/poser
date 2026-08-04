@@ -972,3 +972,104 @@ class PoseVisualizer:
         composite = (target_canvas.astype(np.float32) * (1.0 - alpha) + warped_src.astype(np.float32) * alpha).astype(np.uint8)
 
         return composite
+
+    def create_side_by_side_diagnostic(
+        self,
+        target_image: np.ndarray,
+        target_pose: Optional[PoseData],
+        source_image: np.ndarray,
+        source_pose: Optional[PoseData],
+        film_title: str,
+        frame_idx: int,
+        similarity_score: float,
+        frame_num: int = 1,
+    ) -> np.ndarray:
+        """
+        Create a side-by-side diagnostic visualization panel:
+        Left: Target video frame + target skeleton + bbox
+        Right: Matching source film frame + source skeleton + bbox + similarity score banner
+
+        Args:
+            target_image: Background target frame array.
+            target_pose: Target pose data.
+            source_image: Source film frame array.
+            source_pose: Matching source pose data.
+            film_title: Title of source film.
+            frame_idx: Frame index in source film.
+            similarity_score: Similarity score (0.0 to 1.0).
+            frame_num: Frame sequence index.
+
+        Returns:
+            Side-by-side diagnostic image (1920x1080).
+        """
+        # Render left panel (target image + skeleton)
+        if target_pose is not None:
+            t_vis = self.draw_pose_on_image(
+                target_image.copy(),
+                target_pose,
+                show_keypoints=True,
+                show_skeleton=True,
+                show_bbox=True,
+                show_confidence=False,
+                keypoint_size=4,
+                line_thickness=2,
+            )
+        else:
+            t_vis = target_image.copy()
+
+        t_panel = self._resize_to_hd_with_padding(t_vis)
+        t_panel_half = cv2.resize(t_panel, (960, 1000))
+
+        # Render right panel (source image + skeleton)
+        if source_pose is not None:
+            # Custom colors for source pose (yellow keypoints, blue lines)
+            s_vis = self.draw_pose_on_image(
+                source_image.copy(),
+                source_pose,
+                show_keypoints=True,
+                show_skeleton=True,
+                show_bbox=True,
+                show_confidence=False,
+                keypoint_size=4,
+                line_thickness=2,
+            )
+        else:
+            s_vis = source_image.copy()
+
+        s_panel = self._resize_to_hd_with_padding(s_vis)
+        s_panel_half = cv2.resize(s_panel, (960, 1000))
+
+        # Combine left and right panels horizontally (1920x1000)
+        side_by_side = np.hstack([t_panel_half, s_panel_half])
+
+        # Header banner (80px height)
+        banner = np.zeros((80, 1920, 3), dtype=np.uint8)
+
+        # Draw left header title
+        cv2.putText(
+            banner,
+            f"TARGET FRAME #{frame_num}",
+            (30, 50),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+
+        # Draw right header info
+        sim_pct = similarity_score * 100.0
+        match_text = f"MATCH: {film_title} (Frame #{frame_idx}) | SCORE: {sim_pct:.1f}%"
+        cv2.putText(
+            banner,
+            match_text,
+            (990, 50),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 255, 0) if sim_pct >= 85.0 else (0, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+
+        diagnostic_vis = np.vstack([banner, side_by_side])
+        return diagnostic_vis

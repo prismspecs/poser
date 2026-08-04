@@ -544,6 +544,8 @@ class PoseMatcher:
                 selected_matches.append(None)
                 continue
 
+            target_has_legs = any(target_vec[2*i] != 0 or target_vec[2*i+1] != 0 for i in [13, 14, 15, 16])
+
             best_candidate = None
             best_score = float('inf')
 
@@ -555,6 +557,17 @@ class PoseMatcher:
                 bbox = candidate.get("bbox")
                 if bbox and (bbox[3] - bbox[1]) < min_bbox_height:
                     continue
+
+                v = candidate["vector"]
+                valid_kps = sum(1 for i in range(17) if v[2*i] != 0 or v[2*i+1] != 0)
+                if valid_kps < 12:
+                    continue
+
+                # Require leg visibility if target has legs
+                if target_has_legs:
+                    cand_has_legs = any(v[2*i] != 0 or v[2*i+1] != 0 for i in [13, 14, 15, 16])
+                    if not cand_has_legs:
+                        continue
 
                 # Exclude target film if requested
                 if exclude_same_film and target_film_title and film_title == target_film_title:
