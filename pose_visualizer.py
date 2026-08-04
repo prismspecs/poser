@@ -887,40 +887,31 @@ class PoseVisualizer:
         target_canvas = self._resize_to_hd_with_padding(target_image.copy())
         h_canvas, w_canvas = target_canvas.shape[:2]
 
-        # Extract segmentation mask ONLY for the matching person in source_image
+        # Extract segmentation mask ONLY for the matching person in source_image using crop-based inference
         src_mask = np.zeros(source_image.shape[:2], dtype=np.uint8)
         if segmentation_model is not None:
             try:
-                results = segmentation_model(source_image, verbose=False)
-                best_mask = None
-                best_iou = -1.0
+                s_bx1, s_by1, s_bx2, s_by2 = [int(v) for v in source_bbox]
+                pad_w = int((s_bx2 - s_bx1) * 0.15)
+                pad_h = int((s_by2 - s_by1) * 0.15)
+                cx1, cy1 = max(0, s_bx1 - pad_w), max(0, s_by1 - pad_h)
+                cx2, cy2 = min(source_image.shape[1], s_bx2 + pad_w), min(source_image.shape[0], s_by2 + pad_h)
 
-                s_bx1, s_by1, s_bx2, s_by2 = source_bbox
+                crop = source_image[cy1:cy2, cx1:cx2]
+                if crop.size > 0:
+                    results = segmentation_model(crop, verbose=False)
+                    crop_mask = np.zeros((crop.shape[0], crop.shape[1]), dtype=np.uint8)
 
-                for r in results:
-                    if r.masks is not None and len(r.masks) > 0:
-                        for i, box in enumerate(r.boxes):
+                    if results and len(results) > 0 and results[0].masks is not None:
+                        for i, box in enumerate(results[0].boxes):
                             if int(box.cls[0]) == 0:  # COCO class 0 = person
-                                b = box.xyxy[0].cpu().numpy()  # x1, y1, x2, y2
-                                # Compute IoU overlap with target source_bbox
-                                ix1, iy1 = max(b[0], s_bx1), max(b[1], s_by1)
-                                ix2, iy2 = min(b[2], s_bx2), min(b[3], s_by2)
-                                iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
-                                inter_area = iw * ih
-                                box_area = (b[2] - b[0]) * (b[3] - b[1])
-                                s_area = (s_bx2 - s_bx1) * (s_by2 - s_by1)
-                                union_area = box_area + s_area - inter_area + 1e-6
-                                iou = inter_area / union_area
+                                m = (results[0].masks.data[i].cpu().numpy() * 255).astype(np.uint8)
+                                if m.shape != crop.shape[:2]:
+                                    m = cv2.resize(m, (crop.shape[1], crop.shape[0]))
+                                crop_mask = cv2.bitwise_or(crop_mask, m)
 
-                                if iou > best_iou:
-                                    best_iou = iou
-                                    m = (r.masks.data[i].cpu().numpy() * 255).astype(np.uint8)
-                                    if m.shape != source_image.shape[:2]:
-                                        m = cv2.resize(m, (source_image.shape[1], source_image.shape[0]))
-                                    best_mask = m
-
-                if best_mask is not None and best_iou > 0.1:
-                    src_mask = best_mask
+                    if np.count_nonzero(crop_mask) > 0:
+                        src_mask[cy1:cy2, cx1:cx2] = crop_mask
             except Exception:
                 pass
 
