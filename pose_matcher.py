@@ -512,8 +512,9 @@ class PoseMatcher:
         max_clip_reuse: int = 2,
         cooldown: int = 12,
         target_film_title: Optional[str] = None,
-        min_bbox_height: float = 250.0
-    ) -> List[Dict[str, Any]]:
+        min_bbox_height: float = 250.0,
+        top_k_candidates: int = 5,
+    ) -> List[Any]:
         """
         Match a sequence of target pose vectors against the SQLite pose database.
 
@@ -526,9 +527,10 @@ class PoseMatcher:
             cooldown: Frames to wait before reusing a film in diversity mode.
             target_film_title: Title of source film for target sequence (for exclusion).
             min_bbox_height: Minimum bounding box height (pixels) to filter background actors.
+            top_k_candidates: Number of top candidate matches to return per frame.
 
         Returns:
-            List of winning pose match dictionaries per frame.
+            List of winning pose match dictionaries (or lists of top-k dictionaries) per frame.
         """
         all_poses = pose_db.get_all_poses()
         if not all_poses:
@@ -541,13 +543,11 @@ class PoseMatcher:
 
         for frame_idx, target_vec in enumerate(target_vectors):
             if target_vec is None:
-                selected_matches.append(None)
+                selected_matches.append(None if top_k_candidates == 1 else [])
                 continue
 
             target_has_legs = any(target_vec[2*i] != 0 or target_vec[2*i+1] != 0 for i in [13, 14, 15, 16])
-
-            best_candidate = None
-            best_score = float('inf')
+            frame_candidates = []
 
             for candidate in all_poses:
                 film_title = candidate["film_title"]
@@ -598,23 +598,29 @@ class PoseMatcher:
 
                 score = mse + penalty
 
-                if score < best_score:
-                    best_score = score
-                    best_candidate = candidate
+                frame_candidates.append((score, candidate))
 
-            if best_candidate:
+            if frame_candidates:
+                frame_candidates.sort(key=lambda x: x[0])
+                frame_matches = []
+                for score, cand in frame_candidates[:top_k_candidates]:
+                    sim_score = max(0.0, min(1.0, float(np.exp(-score / 0.2))))
+                    m_info = dict(cand)
+                    m_info["similarity_score"] = sim_score
+                    frame_matches.append(m_info)
+
+                # Pick top candidate for usage tracking
+                best_candidate = frame_matches[0]
                 film_title = best_candidate["film_title"]
                 film_usage_count[film_title] = film_usage_count.get(film_title, 0) + 1
                 last_used_film[film_title] = frame_idx
-                
-                # Convert MSE to similarity score (0 to 1)
-                sim_score = max(0.0, min(1.0, float(np.exp(-best_score / 0.2))))
-                match_info = dict(best_candidate)
-                match_info["similarity_score"] = sim_score
-                selected_matches.append(match_info)
+
+                if top_k_candidates == 1:
+                    selected_matches.append(frame_matches[0])
+                else:
+                    selected_matches.append(frame_matches)
             else:
-                # Fallback to absolute best match regardless of cooldown if constrained
-                selected_matches.append(None)
+                selected_matches.append(None if top_k_candidates == 1 else [])
 
         return selected_matches
 

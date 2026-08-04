@@ -1620,7 +1620,8 @@ def handle_reconstruct(args):
         exclude_same_film=args.exclude_same_film,
         max_clip_reuse=args.max_clip_reuse,
         cooldown=args.cooldown,
-        target_film_title=target_film_title
+        target_film_title=target_film_title,
+        top_k_candidates=5
     )
 
     # Render output frames
@@ -1631,56 +1632,80 @@ def handle_reconstruct(args):
     print("Rendering composite video art frames...")
     
     last_valid_vis = None
-    for idx, (match, (target_fpath, target_img, target_pose)) in enumerate(zip(matches, target_poses)):
+    for idx, (match_entry, (target_fpath, target_img, target_pose)) in enumerate(zip(matches, target_poses)):
         out_frame_path = render_dir / f"frame_{idx+1:04d}.png"
         
+        cand_list = match_entry if isinstance(match_entry, list) else ([match_entry] if match_entry else [])
+        winning_match = None
+        winning_source_img = None
+
+        for cand in cand_list:
+            if not cand or not cand.get("film_path") or not Path(cand["film_path"]).exists():
+                continue
+            source_frame_path = Path(cand["film_path"])
+            if source_frame_path.suffix.lower() in {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}:
+                from utils.image_utils import extract_frame_from_video
+                s_img = extract_frame_from_video(str(source_frame_path), cand["frame_idx"])
+            else:
+                s_img = load_image(str(source_frame_path))
+
+            if s_img is not None:
+                # Class 0 (person) verification check using YOLO segmentation
+                has_person = False
+                try:
+                    seg_res = estimator.segmentation_model(s_img, verbose=False)
+                    for r in seg_res:
+                        if r.boxes is not None and len(r.boxes.cls) > 0:
+                            if any(int(c) == 0 for c in r.boxes.cls):
+                                has_person = True
+                                break
+                except Exception:
+                    has_person = True  # Fallback if model check fails
+
+                if has_person:
+                    winning_match = cand
+                    winning_source_img = s_img
+                    break
+
         comp_vis = None
-        if match and match.get("film_path") and Path(match["film_path"]).exists():
+        if winning_match and winning_source_img is not None:
             try:
-                source_frame_path = Path(match["film_path"])
-                if source_frame_path.suffix.lower() in {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}:
-                    from utils.image_utils import extract_frame_from_video
-                    source_img = extract_frame_from_video(str(source_frame_path), match["frame_idx"])
+                if getattr(args, "diagnostic", False):
+                    # Side-by-side diagnostic comparison view (target left with skeleton, match right with skeleton & score)
+                    source_poses = estimator.extract_poses(winning_source_img, str(out_frame_path))
+                    s_pose = max(source_poses, key=lambda p: p.confidence_score) if source_poses else None
+                    comp_vis = visualizer.create_side_by_side_diagnostic(
+                        target_image=target_img,
+                        target_pose=target_pose,
+                        source_image=winning_source_img,
+                        source_pose=s_pose,
+                        film_title=winning_match["film_title"],
+                        frame_idx=winning_match["frame_idx"],
+                        similarity_score=winning_match["similarity_score"],
+                        frame_num=idx + 1
+                    )
                 else:
-                    source_img = load_image(str(source_frame_path))
+                    # Segment person from source video frame and composite directly onto target frame
+                    comp_vis = visualizer.create_person_cutout_composite(
+                        target_image=target_img,
+                        target_pose=target_pose,
+                        source_image=winning_source_img,
+                        source_bbox=winning_match["bbox"],
+                        segmentation_model=estimator.segmentation_model
+                    )
 
-                if source_img is not None:
-                    if getattr(args, "diagnostic", False):
-                        # Side-by-side diagnostic comparison view (target left with skeleton, match right with skeleton & score)
-                        source_poses = estimator.extract_poses(source_img, str(out_frame_path))
-                        s_pose = max(source_poses, key=lambda p: p.confidence_score) if source_poses else None
-                        comp_vis = visualizer.create_side_by_side_diagnostic(
-                            target_image=target_img,
-                            target_pose=target_pose,
-                            source_image=source_img,
-                            source_pose=s_pose,
-                            film_title=match["film_title"],
-                            frame_idx=match["frame_idx"],
-                            similarity_score=match["similarity_score"],
-                            frame_num=idx + 1
-                        )
-                    else:
-                        # Segment person from source video frame and composite directly onto target frame
-                        comp_vis = visualizer.create_person_cutout_composite(
-                            target_image=target_img,
-                            target_pose=target_pose,
-                            source_image=source_img,
-                            source_bbox=match["bbox"],
-                            segmentation_model=estimator.segmentation_model
-                        )
-
-                        # Draw skeleton overlay if visualize argument is explicitly set
-                        if getattr(args, "visualize", False) and target_pose is not None:
-                            source_poses = estimator.extract_poses(source_img, str(out_frame_path))
-                            if source_poses:
-                                s_pose = max(source_poses, key=lambda p: p.confidence_score)
-                                comp_vis = visualizer.create_winning_pose_overlay(
-                                    target_img,
-                                    target_pose,
-                                    s_pose,
-                                    match["similarity_score"],
-                                    winning_image=source_img
-                                )
+                    # Draw skeleton overlay if visualize argument is explicitly set
+                    if getattr(args, "visualize", False) and target_pose is not None:
+                        source_poses = estimator.extract_poses(winning_source_img, str(out_frame_path))
+                        if source_poses:
+                            s_pose = max(source_poses, key=lambda p: p.confidence_score)
+                            comp_vis = visualizer.create_winning_pose_overlay(
+                                target_img,
+                                target_pose,
+                                s_pose,
+                                winning_match["similarity_score"],
+                                winning_image=winning_source_img
+                            )
             except Exception as e:
                 print(f"Warning rendering frame {idx+1}: {e}")
 
