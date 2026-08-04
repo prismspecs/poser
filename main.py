@@ -677,6 +677,54 @@ def get_pose_scale(pose):
     return max_dist
 
 
+def select_pose_matching_bbox(
+    estimator, image, stored_bbox, image_path: str, min_iou: float = 0.3
+):
+    """
+    Find the person in a retrieved source frame that matches an ingested pose.
+
+    Args:
+        estimator: PoseEstimator used to re-detect poses on the frame.
+        image: Retrieved source frame array.
+        stored_bbox: (x1, y1, x2, y2) bounding box recorded at ingest time.
+        image_path: Path label passed through to the estimator.
+        min_iou: Minimum overlap required to accept a detection.
+
+    Returns:
+        Matching PoseData, or None if the frame holds no corresponding person.
+    """
+    try:
+        poses = estimator.extract_poses(image, image_path)
+    except Exception:
+        return None
+
+    if not poses:
+        return None
+
+    if not stored_bbox:
+        return max(poses, key=lambda p: p.confidence_score)
+
+    sx1, sy1, sx2, sy2 = stored_bbox
+    stored_area = max(1.0, (sx2 - sx1) * (sy2 - sy1))
+
+    best_pose = None
+    best_iou = 0.0
+    for pose in poses:
+        if not pose.bounding_box:
+            continue
+        px1, py1, px2, py2 = pose.bounding_box
+        ix1, iy1 = max(sx1, px1), max(sy1, py1)
+        ix2, iy2 = min(sx2, px2), min(sy2, py2)
+        inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+        pose_area = max(1.0, (px2 - px1) * (py2 - py1))
+        iou = inter / (stored_area + pose_area - inter)
+        if iou > best_iou:
+            best_iou = iou
+            best_pose = pose
+
+    return best_pose if best_iou >= min_iou else None
+
+
 def check_ffmpeg_available() -> bool:
     """Check if ffmpeg is available on the system."""
     try:
@@ -1503,7 +1551,7 @@ def handle_ingest(args):
     """Ingest source videos or frames into SQLite binary pose database."""
     from pose_db import PoseDatabase
     from pose_estimator import PoseEstimator
-    from utils.image_utils import load_image
+    from utils.image_utils import load_image, natural_frame_key
 
     if not args.input_dir and not args.video_file:
         print("Error: Specify --input-dir or --video-file for ingestion.")
@@ -1537,9 +1585,13 @@ def handle_ingest(args):
         if not success:
             continue
 
-        frame_files = sorted(list(temp_dir.glob("frame_*.jpg")))
+        # Sort numerically, not lexicographically: ffmpeg's frame_%04d pattern
+        # widens past 9999, and a plain sort would scramble every index beyond
+        # that point, permanently corrupting the frame->timestamp mapping.
+        frame_files = sorted(temp_dir.glob("frame_*.jpg"), key=natural_frame_key)
         pose_records = []
 
+        skipped_no_person = 0
         for idx, fpath in enumerate(tqdm(frame_files, desc=f"Processing {vid_path.stem}")):
             img = load_image(str(fpath))
             poses = estimator.extract_poses(img, str(fpath))
@@ -1548,6 +1600,25 @@ def handle_ingest(args):
                 # Enforce torso keypoint validation: left_shoulder(5), right_shoulder(6), left_hip(11), right_hip(12)
                 kps = best_pose.keypoints
                 if len(kps) == 17 and all(kps[i] is not None for i in [5, 6, 11, 12]):
+                    # Person verification: confirm YOLO segmentation detects Class 0 (person) in this frame
+                    has_person = False
+                    try:
+                        seg_results = estimator.segmentation_model(img, verbose=False)
+                        for r in seg_results:
+                            if r.boxes is not None and len(r.boxes.cls) > 0:
+                                for i_cls, cls_id in enumerate(r.boxes.cls):
+                                    if int(cls_id) == 0 and float(r.boxes.conf[i_cls]) >= 0.40:
+                                        has_person = True
+                                        break
+                            if has_person:
+                                break
+                    except Exception:
+                        has_person = True  # Fallback: allow if segmentation fails
+                    
+                    if not has_person:
+                        skipped_no_person += 1
+                        continue
+                    
                     pose_records.append({
                         "frame_idx": idx,
                         "timestamp": idx / args.fps,
@@ -1558,6 +1629,8 @@ def handle_ingest(args):
 
         db.add_poses_batch(film_id, pose_records)
         print(f"Successfully ingested {len(pose_records)} poses for {vid_path.stem}")
+        if skipped_no_person > 0:
+            print(f"  ⚠️  Skipped {skipped_no_person} frames (no person detected by segmentation model)")
 
         # Cleanup temp frames
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -1570,7 +1643,7 @@ def handle_reconstruct(args):
     from pose_db import PoseDatabase
     from pose_estimator import PoseEstimator
     from pose_matcher import PoseMatcher
-    from utils.image_utils import load_image
+    from utils.image_utils import load_image, natural_frame_key
 
     db = PoseDatabase(args.db)
     stats = db.get_stats()
@@ -1587,9 +1660,12 @@ def handle_reconstruct(args):
     if target_path.is_file():
         print(f"Extracting target video frames: {target_path.name}")
         extract_frames_from_video(str(target_path), str(target_frames_dir), fps=30.0)
-        target_frame_files = sorted(list(target_frames_dir.glob("frame_*.jpg")))
+        target_frame_files = sorted(target_frames_dir.glob("frame_*.jpg"), key=natural_frame_key)
     else:
-        target_frame_files = sorted(list(target_path.glob("*.jpg")) + list(target_path.glob("*.png")))
+        target_frame_files = sorted(
+            list(target_path.glob("*.jpg")) + list(target_path.glob("*.png")),
+            key=natural_frame_key,
+        )
 
     if not target_frame_files:
         print(f"Error: No target frames found at {args.target}")
@@ -1621,7 +1697,7 @@ def handle_reconstruct(args):
         max_clip_reuse=args.max_clip_reuse,
         cooldown=args.cooldown,
         target_film_title=target_film_title,
-        top_k_candidates=5
+        top_k_candidates=20
     )
 
     # Render output frames
@@ -1632,86 +1708,97 @@ def handle_reconstruct(args):
     print("Rendering composite video art frames...")
     
     last_valid_vis = None
-    for idx, (match_entry, (target_fpath, target_img, target_pose)) in enumerate(zip(matches, target_poses)):
+    composited_frames = 0
+    no_target_pose = 0
+    films_used = {}
+    for idx, (match_entry, (target_fpath, target_img, target_pose)) in enumerate(
+        tqdm(list(zip(matches, target_poses)), desc="Compositing frames")
+    ):
         out_frame_path = render_dir / f"frame_{idx+1:04d}.png"
+
+        if target_pose is None:
+            no_target_pose += 1
         
         cand_list = match_entry if isinstance(match_entry, list) else ([match_entry] if match_entry else [])
         winning_match = None
-        winning_source_img = None
+        comp_vis = None
 
+        # Walk the ranked candidates until one composites cleanly. A match can
+        # fail late - the seek may land on a cut, or the person may resist
+        # segmentation - so ranking alone is not enough to guarantee a frame.
         for cand in cand_list:
             if not cand or not cand.get("film_path") or not Path(cand["film_path"]).exists():
                 continue
             source_frame_path = Path(cand["film_path"])
             if source_frame_path.suffix.lower() in {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}:
-                from utils.image_utils import extract_frame_from_video
-                s_img = extract_frame_from_video(str(source_frame_path), cand["frame_idx"])
+                # Seek by timestamp: frame_idx counts resampled ingest frames, so
+                # using it as a native frame number lands on the wrong moment.
+                from utils.image_utils import extract_frame_at_timestamp
+                s_img = extract_frame_at_timestamp(str(source_frame_path), cand["timestamp"])
             else:
                 s_img = load_image(str(source_frame_path))
 
-            if s_img is not None:
-                # Class 0 (person) verification check using YOLO segmentation
-                has_person = False
-                try:
-                    seg_res = estimator.segmentation_model(s_img, verbose=False)
-                    for r in seg_res:
-                        if r.boxes is not None and len(r.boxes.cls) > 0:
-                            if any(int(c) == 0 for c in r.boxes.cls):
-                                has_person = True
-                                break
-                except Exception:
-                    has_person = True  # Fallback if model check fails
+            if s_img is None:
+                continue
 
-                if has_person:
-                    winning_match = cand
-                    winning_source_img = s_img
-                    break
+            # Re-detect on the retrieved frame and keep the person whose box best
+            # overlaps the ingested one. This both verifies the seek landed on the
+            # right shot and recovers pixel-space keypoints for pose alignment.
+            # The identity must name the *source* frame: the pose cache keys on it,
+            # so reusing the output path would serve every candidate the first
+            # candidate's detection.
+            source_identity = f"{source_frame_path}@{cand['timestamp']:.4f}"
+            s_pose = select_pose_matching_bbox(estimator, s_img, cand.get("bbox"), source_identity)
+            if s_pose is None:
+                continue
 
-        comp_vis = None
-        if winning_match and winning_source_img is not None:
             try:
                 if getattr(args, "diagnostic", False):
                     # Side-by-side diagnostic comparison view (target left with skeleton, match right with skeleton & score)
-                    source_poses = estimator.extract_poses(winning_source_img, str(out_frame_path))
-                    s_pose = max(source_poses, key=lambda p: p.confidence_score) if source_poses else None
-                    comp_vis = visualizer.create_side_by_side_diagnostic(
+                    candidate_vis = visualizer.create_side_by_side_diagnostic(
                         target_image=target_img,
                         target_pose=target_pose,
-                        source_image=winning_source_img,
+                        source_image=s_img,
                         source_pose=s_pose,
-                        film_title=winning_match["film_title"],
-                        frame_idx=winning_match["frame_idx"],
-                        similarity_score=winning_match["similarity_score"],
+                        film_title=cand["film_title"],
+                        frame_idx=cand["frame_idx"],
+                        similarity_score=cand["similarity_score"],
                         frame_num=idx + 1
+                    )
+                elif getattr(args, "visualize", False) and target_pose is not None:
+                    candidate_vis = visualizer.create_winning_pose_overlay(
+                        target_img,
+                        target_pose,
+                        s_pose,
+                        cand["similarity_score"],
+                        winning_image=s_img
                     )
                 else:
                     # Segment person from source video frame and composite directly onto target frame
-                    comp_vis = visualizer.create_person_cutout_composite(
+                    candidate_vis = visualizer.create_person_cutout_composite(
                         target_image=target_img,
                         target_pose=target_pose,
-                        source_image=winning_source_img,
-                        source_bbox=winning_match["bbox"],
-                        segmentation_model=estimator.segmentation_model
+                        source_image=s_img,
+                        source_bbox=s_pose.bounding_box or cand["bbox"],
+                        segmentation_model=estimator.segmentation_model,
+                        source_pose=s_pose,
                     )
-
-                    # Draw skeleton overlay if visualize argument is explicitly set
-                    if getattr(args, "visualize", False) and target_pose is not None:
-                        source_poses = estimator.extract_poses(winning_source_img, str(out_frame_path))
-                        if source_poses:
-                            s_pose = max(source_poses, key=lambda p: p.confidence_score)
-                            comp_vis = visualizer.create_winning_pose_overlay(
-                                target_img,
-                                target_pose,
-                                s_pose,
-                                winning_match["similarity_score"],
-                                winning_image=winning_source_img
-                            )
             except Exception as e:
                 print(f"Warning rendering frame {idx+1}: {e}")
+                continue
 
-        if comp_vis is None:
+            if candidate_vis is not None:
+                comp_vis = candidate_vis
+                winning_match = cand
+                break
+
+        if comp_vis is not None:
+            composited_frames += 1
+            films_used[winning_match["film_title"]] = films_used.get(winning_match["film_title"], 0) + 1
+        else:
             if target_img is not None:
-                comp_vis = visualizer._resize_to_hd_with_padding(target_img)
+                # Fall back to the untouched target frame, at its own resolution
+                comp_vis = target_img
             elif last_valid_vis is not None:
                 comp_vis = last_valid_vis
 
@@ -1719,12 +1806,26 @@ def handle_reconstruct(args):
             cv2.imwrite(str(out_frame_path), comp_vis)
             last_valid_vis = comp_vis
 
+    total = len(target_poses)
+    print(
+        f"\nComposited {composited_frames}/{total} frames "
+        f"({composited_frames / max(1, total):.0%}); "
+        f"{no_target_pose} frames had no detectable target pose."
+    )
+    if films_used:
+        top = sorted(films_used.items(), key=lambda kv: -kv[1])
+        print(f"Source films used ({len(films_used)}):")
+        for title, count in top:
+            print(f"  {count:>4} frames  {title[:64]}")
+
     # Combine frames into output video
     print(f"Encoding output video: {args.output}")
     create_video_from_frames(str(render_dir), args.output, fps=30.0)
     print(f" Video art synthesis complete! Saved to {args.output}")
 
-    # Cleanup temp directories
+    # Cleanup temp directories and any video handles held open for seeking
+    from utils.image_utils import release_capture_cache
+    release_capture_cache()
     shutil.rmtree(target_frames_dir, ignore_errors=True)
 
 

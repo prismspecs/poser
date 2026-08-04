@@ -862,6 +862,128 @@ class PoseVisualizer:
 
         return scaled_pose
 
+    def _segment_person(
+        self,
+        source_image: np.ndarray,
+        source_bbox: Tuple[float, float, float, float],
+        segmentation_model: Optional[Any],
+        min_iou: float = 0.25,
+    ) -> Optional[np.ndarray]:
+        """
+        Build a binary mask covering only the person described by source_bbox.
+
+        Segmentation is attempted on the full frame first, then on a padded crop,
+        which recovers people who are too small for the model to catch at full
+        resolution. Returns None rather than approximating with the bounding box:
+        a rectangular paste of raw film footage reads as a glaring error, so the
+        caller is better off trying the next candidate match.
+
+        Args:
+            source_image: Source film frame array.
+            source_bbox: (x1, y1, x2, y2) box of the person to isolate.
+            segmentation_model: Optional YOLO segmentation model instance.
+            min_iou: Minimum overlap for a detected mask to be accepted.
+
+        Returns:
+            uint8 mask matching source_image's height/width, or None if the
+            person could not be segmented.
+        """
+        src_mask = np.zeros(source_image.shape[:2], dtype=np.uint8)
+        img_h, img_w = source_image.shape[:2]
+
+        bx1, by1, bx2, by2 = [int(v) for v in source_bbox]
+        bx1, by1 = max(0, bx1), max(0, by1)
+        bx2, by2 = min(img_w, bx2), min(img_h, by2)
+        if bx2 <= bx1 or by2 <= by1:
+            return None
+
+        box_area = float((bx2 - bx1) * (by2 - by1))
+
+        def _mask_for(results, shape) -> Optional[np.ndarray]:
+            """Pick the person mask overlapping source_bbox best, in `shape` space."""
+            if not results or results[0].masks is None or results[0].boxes is None:
+                return None
+            best_mask, best_iou = None, min_iou
+            for i, box in enumerate(results[0].boxes):
+                if int(box.cls[0]) != 0:  # COCO class 0 = person
+                    continue
+                dx1, dy1, dx2, dy2 = box.xyxy[0].cpu().numpy()
+                ix1, iy1 = max(bx1, dx1 + shape[2]), max(by1, dy1 + shape[3])
+                ix2, iy2 = min(bx2, dx2 + shape[2]), min(by2, dy2 + shape[3])
+                inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+                det_area = max(1.0, (dx2 - dx1) * (dy2 - dy1))
+                iou = inter / (box_area + det_area - inter)
+                if iou > best_iou:
+                    m = (results[0].masks.data[i].cpu().numpy() * 255).astype(np.uint8)
+                    if m.shape != (shape[1], shape[0]):
+                        m = cv2.resize(m, (shape[0], shape[1]))
+                    best_mask, best_iou = m, iou
+            return best_mask
+
+        if segmentation_model is not None:
+            try:
+                # Pass 1: full frame, offsets are zero
+                full = _mask_for(
+                    segmentation_model(source_image, verbose=False), (img_w, img_h, 0, 0)
+                )
+                if full is not None and np.count_nonzero(full) > 0:
+                    src_mask = full
+
+                # Pass 2: padded crop around the person, for small/distant figures
+                if np.count_nonzero(src_mask) == 0:
+                    pad_w = int((bx2 - bx1) * 0.25)
+                    pad_h = int((by2 - by1) * 0.25)
+                    cx1, cy1 = max(0, bx1 - pad_w), max(0, by1 - pad_h)
+                    cx2, cy2 = min(img_w, bx2 + pad_w), min(img_h, by2 + pad_h)
+                    crop = source_image[cy1:cy2, cx1:cx2]
+                    if crop.size > 0:
+                        crop_mask = _mask_for(
+                            segmentation_model(crop, verbose=False),
+                            (cx2 - cx1, cy2 - cy1, cx1, cy1),
+                        )
+                        if crop_mask is not None and np.count_nonzero(crop_mask) > 0:
+                            src_mask[cy1:cy2, cx1:cx2] = crop_mask
+            except Exception:
+                pass
+
+        if np.count_nonzero(src_mask) == 0:
+            return None
+
+        return src_mask
+
+    def _pose_anchor(
+        self, pose: Optional[PoseData], bbox: Optional[Tuple] = None
+    ) -> Optional[Tuple[float, float, float]]:
+        """
+        Reduce a pose to the (center_x, center_y, scale) used for alignment.
+
+        Alignment is driven by the shoulder/hip quad rather than the bounding
+        box: a box grows and shrinks with outstretched limbs, which makes the
+        composited body jitter between frames, while the torso stays stable.
+        Requiring torso points also rejects close-ups where only a limb is
+        visible, onto which pasting a whole body would look nonsensical.
+
+        Args:
+            pose: Pose to measure, may be None.
+            bbox: Optional (x1, y1, x2, y2) used only to sanity-check the torso.
+
+        Returns:
+            (center_x, center_y, scale) or None if the pose lacks a usable torso.
+        """
+        if pose is None or not pose.keypoints:
+            return None
+
+        torso = self._get_torso_keypoints(pose.keypoints)
+        if not torso or len(torso) < 3:
+            return None
+
+        center = np.mean(torso, axis=0)
+        scale = self._calculate_torso_scale(torso)
+        if scale <= 1.0:
+            return None
+
+        return float(center[0]), float(center[1]), float(scale)
+
     def create_person_cutout_composite(
         self,
         target_image: np.ndarray,
@@ -869,9 +991,16 @@ class PoseVisualizer:
         source_image: np.ndarray,
         source_bbox: Tuple[float, float, float, float],
         segmentation_model: Optional[Any] = None,
-    ) -> np.ndarray:
+        source_pose: Optional[PoseData] = None,
+        max_scale: float = 6.0,
+        max_coverage: float = 0.40,
+    ) -> Optional[np.ndarray]:
         """
-        Segment the person from the source image and warp/composite them directly onto the target frame.
+        Segment the person from the source image and composite them onto the target frame.
+
+        The cutout is scaled and positioned so the source body sits where the
+        target body is, making the borrowed figure appear to perform the target's
+        movement. Output keeps the target frame's own resolution.
 
         Args:
             target_image: Background target frame array.
@@ -879,88 +1008,68 @@ class PoseVisualizer:
             source_image: Source film frame array containing matching person.
             source_bbox: (x1, y1, x2, y2) bounding box of person in source_image.
             segmentation_model: Optional YOLO segmentation model instance.
+            source_pose: Optional source pose, enabling torso-based alignment.
+            max_scale: Largest tolerated source-to-target magnification.
+            max_coverage: Largest fraction of the frame the cutout may cover.
 
         Returns:
-            Composite image with source person cutout layered over target.
+            Composite image, or None if this match cannot be composited cleanly
+            so the caller can fall through to the next candidate.
         """
-        # Ensure target image is in standard 1920x1080 HD container
-        target_canvas = self._resize_to_hd_with_padding(target_image.copy())
+        target_anchor = self._pose_anchor(target_pose)
+        source_anchor = self._pose_anchor(source_pose, source_bbox)
+
+        if target_anchor is None or source_anchor is None:
+            return None
+
+        t_cx, t_cy, t_scale = target_anchor
+        s_cx, s_cy, s_scale = source_anchor
+
+        # A distant source body blown up to fill a foreground target smears into
+        # an unrecognisable blob; reject those instead of rendering them.
+        scale = t_scale / s_scale
+        if not (1.0 / max_scale) <= scale <= max_scale:
+            return None
+
+        src_mask = self._segment_person(source_image, source_bbox, segmentation_model)
+        if src_mask is None:
+            return None
+
+        target_canvas = target_image.copy()
         h_canvas, w_canvas = target_canvas.shape[:2]
 
-        # Extract segmentation mask ONLY for the matching person in source_image using crop-based inference
-        src_mask = np.zeros(source_image.shape[:2], dtype=np.uint8)
-        if segmentation_model is not None:
-            try:
-                s_bx1, s_by1, s_bx2, s_by2 = [int(v) for v in source_bbox]
-                pad_w = int((s_bx2 - s_bx1) * 0.15)
-                pad_h = int((s_by2 - s_by1) * 0.15)
-                cx1, cy1 = max(0, s_bx1 - pad_w), max(0, s_by1 - pad_h)
-                cx2, cy2 = min(source_image.shape[1], s_bx2 + pad_w), min(source_image.shape[0], s_by2 + pad_h)
-
-                crop = source_image[cy1:cy2, cx1:cx2]
-                if crop.size > 0:
-                    results = segmentation_model(crop, verbose=False)
-                    crop_mask = np.zeros((crop.shape[0], crop.shape[1]), dtype=np.uint8)
-
-                    if results and len(results) > 0 and results[0].masks is not None:
-                        for i, box in enumerate(results[0].boxes):
-                            if int(box.cls[0]) == 0:  # COCO class 0 = person
-                                m = (results[0].masks.data[i].cpu().numpy() * 255).astype(np.uint8)
-                                if m.shape != crop.shape[:2]:
-                                    m = cv2.resize(m, (crop.shape[1], crop.shape[0]))
-                                crop_mask = cv2.bitwise_or(crop_mask, m)
-
-                    if np.count_nonzero(crop_mask) > 0:
-                        src_mask[cy1:cy2, cx1:cx2] = crop_mask
-            except Exception:
-                pass
-
-        # Fallback mask using bounding box if segmentation mask is empty
-        if np.count_nonzero(src_mask) == 0:
-            x1, y1, x2, y2 = [int(v) for v in source_bbox]
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(source_image.shape[1], x2), min(source_image.shape[0], y2)
-            cv2.ellipse(
-                src_mask,
-                ((x1 + x2) // 2, (y1 + y2) // 2),
-                (max(10, (x2 - x1) // 2), max(10, (y2 - y1) // 2)),
-                0, 0, 360, 255, -1
-            )
-
-        # Target center and height
-        if target_pose is not None and target_pose.bounding_box:
-            t_h_orig, t_w_orig = target_image.shape[:2]
-            scale_hd = min(w_canvas / t_w_orig, h_canvas / t_h_orig)
-            x_off = (w_canvas - int(t_w_orig * scale_hd)) // 2
-            y_off = (h_canvas - int(t_h_orig * scale_hd)) // 2
-
-            t_bx1, t_by1, t_bx2, t_by2 = target_pose.bounding_box
-            t_cx = ((t_bx1 + t_bx2) / 2.0) * scale_hd + x_off
-            t_cy = ((t_by1 + t_by2) / 2.0) * scale_hd + y_off
-            t_h = max(30.0, (t_by2 - t_by1) * scale_hd)
-        else:
-            t_cx, t_cy, t_h = w_canvas / 2.0, h_canvas / 2.0, h_canvas * 0.6
-
-        # Source center and height
-        s_bx1, s_by1, s_bx2, s_by2 = source_bbox
-        s_cx = (s_bx1 + s_bx2) / 2.0
-        s_cy = (s_by1 + s_by2) / 2.0
-        s_h = max(30.0, s_by2 - s_by1)
-
-        scale = t_h / s_h
-        tx = t_cx - scale * s_cx
-        ty = t_cy - scale * s_cy
-
-        M = np.float32([[scale, 0, tx], [0, scale, ty]])
+        M = np.float32(
+            [
+                [scale, 0, t_cx - scale * s_cx],
+                [0, scale, t_cy - scale * s_cy],
+            ]
+        )
 
         warped_src = cv2.warpAffine(source_image, M, (w_canvas, h_canvas))
         warped_mask = cv2.warpAffine(src_mask, M, (w_canvas, h_canvas))
 
-        # Smooth edges of warped mask using Gaussian Blur for natural alpha blending
-        blurred_mask = cv2.GaussianBlur(warped_mask, (15, 15), 0)
+        # Require the cutout to land on screen and still read as a figure. Too
+        # small and it is invisible; too large and it is a source close-up
+        # swallowing the frame as an abstract smear rather than a body. Measured
+        # over a full reconstruction, real bodies sit under 0.32 of the frame
+        # while close-up artefacts cluster above 0.49.
+        canvas_area = float(h_canvas * w_canvas)
+        visible = np.count_nonzero(warped_mask)
+        if not (0.002 * canvas_area) <= visible <= (max_coverage * canvas_area):
+            return None
+
+        # Feather proportionally to the composited body, so edges stay soft on
+        # large figures without dissolving small ones.
+        feather = int(max(3, min(31, round(t_scale * 0.06))))
+        if feather % 2 == 0:
+            feather += 1
+        blurred_mask = cv2.GaussianBlur(warped_mask, (feather, feather), 0)
         alpha = (blurred_mask.astype(np.float32) / 255.0)[:, :, None]
 
-        composite = (target_canvas.astype(np.float32) * (1.0 - alpha) + warped_src.astype(np.float32) * alpha).astype(np.uint8)
+        composite = (
+            target_canvas.astype(np.float32) * (1.0 - alpha)
+            + warped_src.astype(np.float32) * alpha
+        ).astype(np.uint8)
 
         return composite
 

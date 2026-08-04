@@ -24,6 +24,12 @@ class PoseCache:
     def _calculate_image_hash(self, image_path: str) -> str:
         """Calculate a hash of the image content for unique identification."""
         try:
+            # Video-derived frames are identified as "<film path>@<timestamp>"
+            # rather than by a file on disk; hash the identity directly instead
+            # of asking OpenCV to decode a path that was never meant to exist.
+            if not Path(image_path).is_file():
+                return hashlib.md5(image_path.encode()).hexdigest()
+
             # Read image and calculate hash
             img = cv2.imread(image_path)
             if img is None:

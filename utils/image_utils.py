@@ -6,6 +6,7 @@ Handles image loading, validation, and preprocessing.
 import cv2
 import numpy as np
 from PIL import Image
+from collections import OrderedDict
 from pathlib import Path
 from typing import Union, Tuple, Optional
 import logging
@@ -91,6 +92,102 @@ def extract_frame_from_video(video_path: Union[str, Path], frame_idx: int) -> Op
     if ret and frame is not None:
         return frame
     return None
+
+
+# Reconstruction seeks the same handful of films thousands of times, and opening
+# a feature-length container costs far more than seeking inside an open one, so
+# handles are kept warm across calls.
+_CAPTURE_CACHE: "OrderedDict[str, cv2.VideoCapture]" = OrderedDict()
+_CAPTURE_CACHE_LIMIT = 8
+
+
+def _get_capture(video_path: str) -> Optional[cv2.VideoCapture]:
+    """Return a cached VideoCapture for video_path, opening one if needed."""
+    cap = _CAPTURE_CACHE.get(video_path)
+    if cap is not None and cap.isOpened():
+        _CAPTURE_CACHE.move_to_end(video_path)
+        return cap
+
+    if cap is not None:
+        cap.release()
+        _CAPTURE_CACHE.pop(video_path, None)
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        cap.release()
+        return None
+
+    _CAPTURE_CACHE[video_path] = cap
+    while len(_CAPTURE_CACHE) > _CAPTURE_CACHE_LIMIT:
+        _, evicted = _CAPTURE_CACHE.popitem(last=False)
+        evicted.release()
+    return cap
+
+
+def release_capture_cache() -> None:
+    """Close every cached video handle. Call when reconstruction finishes."""
+    while _CAPTURE_CACHE:
+        _, cap = _CAPTURE_CACHE.popitem()
+        cap.release()
+
+
+def extract_frame_at_timestamp(
+    video_path: Union[str, Path], timestamp: float
+) -> Optional[np.ndarray]:
+    """
+    Extract the frame displayed at a wall-clock timestamp in a video file.
+
+    Poses are ingested from a resampled frame stream (``--fps``), so a stored
+    ``frame_idx`` is an index into that resampled sequence, not into the film's
+    native frame numbering. Seeking must therefore go through the timestamp,
+    which is resolution- and frame-rate-independent.
+
+    Args:
+        video_path: Path to the video file.
+        timestamp: Time in seconds from the start of the video.
+
+    Returns:
+        Frame image as BGR numpy array, or None if extraction fails.
+    """
+    video_path = str(Path(video_path))
+    cap = _get_capture(video_path)
+    if cap is None:
+        return None
+
+    cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, timestamp) * 1000.0)
+    ret, frame = cap.read()
+
+    if not ret or frame is None:
+        # Some containers (notably long HEVC .mkv files) refuse millisecond
+        # seeks; fall back to converting the timestamp with the native fps.
+        native_fps = cap.get(cv2.CAP_PROP_FPS)
+        if native_fps and native_fps > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(round(timestamp * native_fps)))
+            ret, frame = cap.read()
+
+    if ret and frame is not None:
+        return frame
+    return None
+
+
+def natural_frame_key(path: Union[str, Path]) -> Tuple:
+    """
+    Sort key that orders ``frame_0001.jpg`` style filenames numerically.
+
+    ffmpeg's ``frame_%04d`` pattern grows past four digits once a video yields
+    more than 9999 frames, at which point plain lexicographic sorting puts
+    ``frame_10000.jpg`` immediately after ``frame_1000.jpg``. Ordering by the
+    embedded integer keeps frame indices aligned with real time.
+
+    Args:
+        path: Frame file path or name.
+
+    Returns:
+        Tuple sort key of (numeric frame value, name) for stable ordering.
+    """
+    stem = Path(path).stem
+    digits = "".join(ch for ch in stem if ch.isdigit())
+    return (int(digits) if digits else -1, stem)
 
 
 def validate_image_path(image_path: Union[str, Path]) -> bool:
