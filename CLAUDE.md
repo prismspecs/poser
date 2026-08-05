@@ -30,7 +30,21 @@ python3 main.py ingest --input-dir /path/to/movies --db pose_library.db --fps 12
 
 # Inspect database stats (total films, frames, poses, storage size)
 python3 main.py db-stats --db pose_library.db
+
+# Drop poses whose source frame contains no verifiable person
+python3 clean_db.py --db pose_library.db
+
+# Repair frame->timestamp mappings in a database ingested before the
+# natural-sort fix (dry run by default; no-op for films under 9999 frames)
+python3 repair_db_timestamps.py --db pose_library.db --apply
 ```
+
+**Frame indexing**: `frame_idx` is a position in the resampled `--fps` stream,
+*not* a native video frame number. Always retrieve source frames with
+`extract_frame_at_timestamp(path, timestamp)`. Seeking with `CAP_PROP_POS_FRAMES`
+on `frame_idx` silently reads the wrong moment. List extracted frames with
+`natural_frame_key`, since `frame_%04d` widens past 9999 and plain sorting
+scrambles the ordering.
 
 ### Video Art Reconstruction
 ```bash
@@ -60,20 +74,31 @@ python3 test_random_poses.py
 
 ```
 poser/
-├── main.py              # CLI entry point (ingest, reconstruct, db-stats)
-├── pose_estimator.py    # YOLO-based pose detection & keypoint extraction
-├── pose_matcher.py      # Pose normalization, vector similarity, diversity constraints
-├── pose_cache.py        # Database storage adapter (SQLite/Binary/JSON fallback)
-├── pose_visualizer.py   # Overlay, mask, and diagnostic rendering
+├── main.py                    # CLI entry point (ingest, reconstruct, db-stats)
+├── pose_estimator.py          # YOLO-based pose detection & keypoint extraction
+├── pose_matcher.py            # Vector similarity & diversity constraints
+├── pose_db.py                 # SQLite pose library (binary float16 vectors)
+├── pose_cache.py              # On-disk cache of per-image pose detections
+├── pose_visualizer.py         # Cutout compositing, overlay & diagnostic rendering
+├── clean_db.py                # Prune poses with no verifiable person
+├── repair_db_timestamps.py    # Fix frame->timestamp maps from pre-fix ingests
+├── test_pipeline.py           # Standalone per-stage diagnostics (local paths)
+├── test_random_poses.py       # Pose matching spot-check script
 ├── utils/
-│   ├── image_utils.py   # Frame extraction & OpenCV operations
-│   └── pose_utils.py    # PoseData structures & spatial normalization
-├── tests/               # Unit and integration test suite
-├── CLAUDE.md            # Claude Code instructions & architecture reference
-├── GEMINI.md            # Gemini / Antigravity instructions
-├── AGENTS.md            # OpenCode & multi-agent system prompt
-└── plan.md              # Detailed technical specification & roadmap
+│   ├── image_utils.py         # Frame extraction, timestamp seeking, natural sort
+│   └── pose_utils.py          # PoseData structures & spatial normalization
+├── tests/                     # pytest suite
+├── test-vids/input.mkv        # Standing test target for `reconstruct`
+├── results/                   # Generated renders (gitignored)
+├── CLAUDE.md                  # Claude Code instructions & architecture reference
+├── GEMINI.md                  # Gemini / Antigravity instructions
+├── AGENTS.md                  # OpenCode & multi-agent system prompt
+└── plan.md                    # Detailed technical specification & roadmap
 ```
+
+`pose_db.py` is the pose library; `pose_cache.py` is an unrelated detection
+cache keyed by image identity. Video-derived frames are cached under
+`"<film path>@<timestamp>"` rather than a real file path.
 
 ---
 

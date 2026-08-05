@@ -96,9 +96,21 @@ tmp/
 *.db
 pose_library.db
 
+# Scratch frames and diagnostic stills dropped in data/ during debugging.
+# The subdirectories are ignored above; these catch loose files beside them.
+data/*.png
+data/*.jpg
+data/*.jpeg
+
 # Media files
 *.mp4
 *.mov
 *.avi
 *.mkv
 *.webm
+
+# Tracked on purpose despite the media rules above: the standing test input
+# for `reconstruct`, and the reference render used to compare pipeline output.
+# Generated renders belong in results/, which is ignored.
+!test-vids/input.mkv
+!output_video.mp4
